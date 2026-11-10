@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1b1712">
+<title>삼국쟁투 · Battle of Three Kingdoms</title>
+<style>/*STYLE*/</style>
+</head>
+<body>
+<div id="app">
+  <section id="title" class="screen">
+    <canvas id="seal" width="48" height="48"></canvas>
+    <h1>삼국쟁투</h1>
+    <p class="en">Battle of Three Kingdoms</p>
+    <p class="sub">후한 말, 천하를 다투는 턴제 전략 · <span id="ver"></span></p>
+    <div class="menu">
+      <button id="btnNew" class="big">새 게임</button>
+      <button id="btnLoad" class="big ghost">이어하기</button>
+    </div>
+    <div id="pick" class="hidden">
+      <h2>191년, 어느 군웅으로 나서겠습니까?</h2>
+      <div id="factions" class="grid"></div>
+      <label class="opt"><input type="checkbox" id="optVirtual" checked> 가상 인재 등장 (끄면 역사 인물만)</label>
+    </div>
+  </section>
+
+  <section id="game" class="screen hidden">
+    <header id="top">
+      <div class="when"><b id="date"></b> <span id="fname"></span></div>
+      <div class="res" id="res"></div>
+      <button id="btnEnd" class="end">턴 종료</button>
+      <button id="btnMenu" class="icon" aria-label="메뉴">☰</button>
+    </header>
+    <div id="mapWrap"><canvas id="map"></canvas><div id="sieges"></div></div>
+    <div id="panel" class="sheet hidden"></div>
+  </section>
+
+  <div id="modal" class="modal hidden"><div class="box" id="modalBox"></div></div>
+  <div id="toast"></div>
+</div>
+<script>/*SCRIPT*/</script>
+</body>
+</html>
