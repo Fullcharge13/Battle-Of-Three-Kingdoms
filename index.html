@@ -98,6 +98,26 @@ select { padding: 5px; border-radius: 5px; border: 1px solid var(--line); backgr
 #toast div { background: #15120ee6; color: var(--paper); padding: 8px 12px; border-radius: 8px; font-size: 14px; }
 table.mini { width: 100%; border-collapse: collapse; font-size: 13px; }
 table.mini td, table.mini th { padding: 4px; border-bottom: 1px solid #d8c7a2; text-align: left; }
+
+/* ---------- 튜토리얼 ---------- */
+#tut { position: absolute; left: 8px; right: 8px; top: 8px; z-index: 7; background: #fbf3df; border: 2px solid #c9a24a; border-radius: 10px; padding: 8px 10px; box-shadow: var(--shadow); }
+@media (min-width: 900px) { #tut { top: auto; bottom: 16px; right: auto; width: 400px; } }
+.tutline { display: flex; gap: 10px; align-items: flex-start; }
+.tutline .face { width: 48px; height: 48px; image-rendering: pixelated; flex: none; background: #e9dcbd; border-radius: 6px; border: 1px solid #c9a24a; }
+.tutline p { margin: 0; }
+#tut .say { font-family: var(--font); font-size: 14px; line-height: 1.45; }
+#tut .todo { margin-top: 5px; font-weight: 700; color: var(--red); font-size: 14px; }
+.tutbar { display: flex; justify-content: space-between; align-items: center; margin-top: 6px; font-size: 12px; color: var(--muted); }
+.tutbar button { margin-left: 6px; }
+.tutline.tip { background: #fbf3df; border: 1px solid #c9a24a; border-radius: 8px; padding: 6px 8px; margin: 6px 0 10px; font-size: 14px; }
+.tutline.tip .face { width: 36px; height: 36px; }
+.tut-hl { outline: 3px solid #f2b51e !important; outline-offset: 2px; animation: tutglow 1s ease-in-out infinite alternate; }
+@keyframes tutglow { from { outline-color: #f2b51e; } to { outline-color: #fff1b0; } }
+#tut.shake { animation: tutshake .35s; }
+@keyframes tutshake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-6px); } 75% { transform: translateX(6px); } }
+.badge { font-size: 12px; background: #c9a24a; color: #1b1712; padding: 2px 7px; border-radius: 10px; font-family: var(--ui); }
+#top .when .badge { color: #1b1712; font-weight: 700; }
+@media (max-width: 899px) { #game.panel-open #sieges { display: none; } .scard { font-size: 12px; padding: 6px 8px; } }
 </style>
 </head>
 <body>
@@ -110,6 +130,7 @@ table.mini td, table.mini th { padding: 4px; border-bottom: 1px solid #d8c7a2; t
     <div class="menu">
       <button id="btnNew" class="big">새 게임</button>
       <button id="btnLoad" class="big ghost">이어하기</button>
+      <button id="btnTut" class="big ghost">튜토리얼</button>
     </div>
     <div id="pick" class="hidden">
       <h2>191년, 어느 군웅으로 나서겠습니까?</h2>
@@ -120,12 +141,12 @@ table.mini td, table.mini th { padding: 4px; border-bottom: 1px solid #d8c7a2; t
 
   <section id="game" class="screen hidden">
     <header id="top">
-      <div class="when"><b id="date"></b> <span id="fname"></span></div>
+      <div class="when"><b id="date"></b> <span id="fname"></span> <span id="tutBadge" class="badge hidden">연습 중(휴전)</span></div>
       <div class="res" id="res"></div>
       <button id="btnEnd" class="end">턴 종료</button>
       <button id="btnMenu" class="icon" aria-label="메뉴">☰</button>
     </header>
-    <div id="mapWrap"><canvas id="map"></canvas><div id="sieges"></div></div>
+    <div id="mapWrap"><canvas id="map"></canvas><div id="sieges"></div><div id="tut" class="hidden"></div></div>
     <div id="panel" class="sheet hidden"></div>
   </section>
 
@@ -288,7 +309,8 @@ var DATA = { REGIONS, CITIES, FACTIONS, GENERALS, UNIT, COUNTER, APT, APT_RANK, 
 
 // ===== 삼국쟁투 규칙 엔진 (화면과 무관, Node에서도 돈다) =====
 var GUNUNG = (function () {
-  const SAVE_VER = 1;
+  const SAVE_VER = 2;
+  const TUT_SEED = 3;
   const SAVE_KEY = 'gunung_save';
   const _hooks = { planCity: null };
 
@@ -325,7 +347,7 @@ var GUNUNG = (function () {
     const G = {
       saveVer: SAVE_VER, year: 191, month: 1, turn: 0, seed: seed || 1, rs: (seed || 1) * 7919 + 13,
       playerFaction: factionId, factions: {}, cities: {}, gens: {}, sieges: [], nextSiege: 1,
-      log: [], opts: Object.assign({ virtual: true }, opts || {}), over: null, replays: [],
+      log: [], opts: Object.assign({ virtual: true }, opts || {}), over: null, replays: [], tut: null,
     };
     for (const f of DATA.FACTIONS) {
       const r = DATA.GENERALS.find(g => g.id === f.ruler);
@@ -354,6 +376,81 @@ var GUNUNG = (function () {
       addLog(G, `${G.factions[factionId].name} 세력으로 천하에 나섰습니다.`);
     } else G.playerFaction = null;
     return G;
+  }
+
+  // ---------- 튜토리얼: 연습 판과 보호 ----------
+  function newTutorial() {
+    const G = newGame('cao', TUT_SEED, { virtual: true });
+    G.tut = { step: 1, protect: true, done: false };
+    return G;
+  }
+  // 튜토리얼 동안 AI가 노리지 못하는 성: 허창과 조조의 성
+  function isProtected(G, cityId) {
+    if (!G.tut || !G.tut.protect) return false;
+    return cityId === 'xuchang' || (G.cities[cityId] && G.cities[cityId].owner === 'cao');
+  }
+  function tutSkip(G) { if (G.tut) { G.tut.protect = false; G.tut.done = true; } }
+
+  // 11단계. say = 순욱의 말, todo = ▶ 할 일 한 줄
+  const TUT_STEPS = [
+    { id: 'intro', say: '주공, 동탁이 천하를 어지럽히니 우리도 기반을 다져야 합니다. 먼저 남쪽의 빈 성 허창을 손에 넣으시지요.', todo: '「다음」을 누르세요' },
+    { id: 'hud', say: '위쪽에는 날짜와 우리 세력의 금·식량·병력이 있고, 지도에는 성마다 주인의 색과 병력이 보입니다.', todo: '「다음」을 누르세요' },
+    { id: 'openCap', say: '먼저 우리의 근거지 진류를 살펴보시지요.', todo: '지도에서 진류 성을 누르세요' },
+    { id: 'stats', say: '인구가 많을수록 병사를 많이 뽑을 수 있고, 민심이 낮으면 세금과 징병이 줄어듭니다.', todo: '「다음」을 누르세요' },
+    { id: 'recruit', say: '수도의 장수에게는 직접 일을 맡깁니다. 하후돈 장군에게 병사를 모으게 하시지요.', todo: '하후돈의 할 일을 「징병」으로 바꾸세요' },
+    { id: 'delegate', say: '다른 성은 태수에게 방침만 내리시면 됩니다. 복양을 보시지요.', todo: '지도에서 복양 성을 누르세요' },
+    { id: 'endTurn1', say: '한 달을 보내 보시지요. 맡긴 일은 바꾸실 때까지 계속됩니다.', todo: '위쪽 「턴 종료」를 누르고, 보고서는 「확인」', endTurn: true },
+    { id: 'march', say: '이제 출진입니다. 첫 부대가 총대장이 되며, 기병은 궁병에 강하고 보병은 기병에 강합니다.', todo: '진류를 누르고 「출진」 → 목표 허창 → 「출진」' },
+    { id: 'siege', say: '성은 곧바로 치지 않고 먼저 에워쌉니다. 에워쌀수록 성안의 식량과 사기가 떨어집니다.', todo: '「턴 종료」를 누르세요(포위 2턴째까지)', endTurn: true },
+    { id: 'assault', say: '포위 판에 「지금 치면 예상 승률」이 보입니다. 이만하면 충분합니다.', todo: '포위 판의 「공격」을 누르고 「턴 종료」', endTurn: true },
+    { id: 'victory', say: '사다리를 걸고 성문을 부수면 기병이 성안으로 돌입합니다. 허창을 얻었습니다. 감축드립니다, 주공!', todo: '「다음」을 누르면 연습이 끝납니다' },
+  ];
+  const TUT_SIEGE_TURNS = 2;
+  function tutDone(G) { if (G.tut) { G.tut.protect = false; G.tut.done = true; } }
+  // 5단계에서 징병을 맡길 장수: 하후돈, 없으면 진류에서 통솔이 가장 높은 장수
+  function tutRecruiter(G) {
+    const here = officersIn(G, 'chenliu');
+    if (here.some(g => g.id === 'xiahoudun')) return 'xiahoudun';
+    const best = here.sort((a, b) => b.lead - a.lead)[0];
+    return best ? best.id : null;
+  }
+  const tutStepId = G => (G.tut && !G.tut.done ? TUT_STEPS[G.tut.step - 1].id : null);
+  function tutCanEndTurn(G) {
+    const id = tutStepId(G);
+    return !id || !!TUT_STEPS[G.tut.step - 1].endTurn;
+  }
+  // 사건 ev가 들어올 때마다 단계를 판정한다. 단계가 바뀌면 true
+  function tutCheck(G, ev) {
+    const id = tutStepId(G);
+    if (!id) return false;
+    const before = G.tut.step;
+    const go = n => { G.tut.step = n; };
+    const siege = G.sieges.find(s => s.att === 'cao' && s.to === 'xuchang');
+    const won = G.cities.xuchang.owner === 'cao';
+    switch (id) {
+      case 'intro': case 'hud': case 'stats': if (ev.type === 'next') go(before + 1); break;
+      case 'openCap': if (ev.type === 'select' && ev.city === 'chenliu') go(4); break;
+      case 'recruit': {
+        // 하후돈이 진류에 없으면(먼저 출진 등) 진류의 어느 장수든 징병이면 된다
+        const xh = G.gens.xiahoudun, here = officersIn(G, 'chenliu');
+        const ok = here.includes(xh) ? xh.task === 'recruit' : here.some(g => g.task === 'recruit');
+        if (ok) go(6);
+        break;
+      }
+      case 'delegate': if (ev.type === 'select' && ev.city === 'puyang') go(7); break;
+      case 'endTurn1': if (ev.type === 'turn') go(8); break;
+      case 'march': if (won) go(11); else if (siege) { G.tut.retry = false; go(9); } break;
+      case 'siege': case 'assault':
+        if (ev.type === 'battle' && !ev.won) G.tut.retry = true;
+        if (won) go(11);
+        else if (!siege) go(8);
+        else if (id === 'siege' && siege.turns >= TUT_SIEGE_TURNS) go(10);
+        break;
+      case 'victory': if (ev.type === 'next') { tutDone(G); return true; } break;
+    }
+    // 허창을 얻는 즉시 휴전·보호를 푼다(마무리 창은 「다음」에서)
+    if (G.tut.step === 11) G.tut.protect = false;
+    return G.tut.step !== before;
   }
 
   function addLog(G, text, kind) {
@@ -574,7 +671,7 @@ var GUNUNG = (function () {
     if (c.troops < 15000) return { policy: 'mil' };
     if (c.owner !== G.playerFaction) {
       const mine = attackPotential(G, c);
-      const tgt = fronts.map(o => ({ o, d: defenseOf(G, o) })).sort((a, b) => a.d - b.d)[0];
+      const tgt = fronts.filter(o => !isProtected(G, o.id)).map(o => ({ o, d: defenseOf(G, o) })).sort((a, b) => a.d - b.d)[0];
       if (tgt && mine > tgt.d * AI_ATK_POLICY) return { policy: 'atk', target: tgt.o.id };
     }
     return { policy: c.troops < c.pop * RECRUIT_CAP * 0.7 ? 'mil' : 'def' };
@@ -616,6 +713,7 @@ var GUNUNG = (function () {
       if (!c.owner || c.direct || !c.cur || c.cur.policy !== 'atk') continue;
       if (c.owner === G.playerFaction && c.policy !== 'atk') continue;
       const t = G.cities[c.cur.target];
+      if (t && c.owner !== G.playerFaction && isProtected(G, t.id)) continue;
       if (!t || t.owner === c.owner || G.sieges.some(s => s.from === c.id || (s.to === t.id && s.att === c.owner))) continue;
       const offs = officersIn(G, c.id).sort((a, b) => (b.lead + b.war) - (a.lead + a.war));
       if (!offs.length) continue;
@@ -648,6 +746,16 @@ var GUNUNG = (function () {
       const g = officersIn(G, give.id).filter(x => x.id !== f.ruler).sort((a, b) => (b.lead + b.war) - (a.lead + a.war))[0];
       if (g) g.city = need.id;
     }
+  }
+
+  // 출진 창 기본값(화면·튜토리얼·시험이 같은 값을 쓴다): 통솔+무력 상위 3명, 각자 잘 맞는 병종, 성 병력 60%를 통솔 한도 비례로
+  function defaultArmy(G, fromId) {
+    const c = G.cities[fromId];
+    const offs = officersIn(G, fromId).sort((a, b) => (b.lead + b.war) - (a.lead + a.war)).slice(0, 3);
+    if (!offs.length) return [];
+    const pool = Math.floor(c.troops * 0.6);
+    const cap = offs.reduce((a, g) => a + unitCap(g), 0);
+    return offs.map(g => ({ gen: g.id, type: bestType(g), troops: Math.max(100, Math.min(unitCap(g), Math.floor(pool * unitCap(g) / cap / 100) * 100)) }));
   }
 
   // ---------- 출진과 포위 ----------
@@ -1255,12 +1363,17 @@ var GUNUNG = (function () {
       o.replays = o.replays || [];
       o.saveVer = 1;
     }
+    if (o.saveVer < 2) {
+      o.tut = o.tut || null;
+      o.saveVer = 2;
+    }
     return o;
   }
   function load(str) { return migrate(JSON.parse(str)); }
 
   return {
     SAVE_VER, SAVE_KEY, DATA, TASKS, _hooks, W, H, WALL_X, GATE_Y,
+    TUT_SEED, TUT_STEPS, TUT_SIEGE_TURNS, newTutorial, isProtected, tutSkip, tutDone, tutCheck, tutCanEndTurn, tutRecruiter, defaultArmy,
     makeRng, newGame, endTurn, setTask, planCity, aiPolicy, effectivePolicy, launchAttack, siegeOrder, tickSieges,
     recruitAmount, doRecruit, woundedFrom, healWounded, towersFor, sabotage, makeVirtual, yearlyTalent,
     simulateBattle, battleState, routUnit, canClimb, counter, save, load, migrate, unitCap, bestType,
@@ -1271,15 +1384,20 @@ var GUNUNG = (function () {
 // ===== 삼국쟁투 화면 =====
 (function () {
   const K = GUNUNG, D = K.DATA;
-  const VERSION = 'v0.1.1';
+  const VERSION = 'v0.2';
   const $ = id => document.getElementById(id);
   const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const fmt = n => Math.round(n).toLocaleString('ko-KR');
-  let G = null, sel = null, modalAt = 0, busy = false;
+  let G = null, sel = null, modalAt = 0, busy = false, askedOnce = false;
 
   // ---------- 저장 ----------
-  function storeGet() { try { return localStorage.getItem(K.SAVE_KEY); } catch (e) { return null; } }
-  function storeSet(v) { try { localStorage.setItem(K.SAVE_KEY, v); return true; } catch (e) { return false; } }
+  const TUT_KEY = 'samguk_tut', SEEN_KEY = 'samguk_seen';
+  function storeGet(key) { try { return localStorage.getItem(key || K.SAVE_KEY); } catch (e) { return null; } }
+  function storeSet(v, key) { try { localStorage.setItem(key || K.SAVE_KEY, v); return true; } catch (e) { return false; } }
+  function storeDel(key) { try { localStorage.removeItem(key); } catch (e) { /* 저장소 막힘 */ } }
+  const inTut = () => !!(G && G.tut && !G.tut.done);
+  // 튜토리얼 판은 따로 저장해 본 게임 저장을 덮어쓰지 않는다
+  function persist() { return storeSet(K.save(G), inTut() || (G && G.tut && G.tut.done && !G.tut.kept) ? TUT_KEY : K.SAVE_KEY); }
 
   // ---------- 코드 도트 ----------
   const CASTLE = [
@@ -1322,8 +1440,17 @@ var GUNUNG = (function () {
     $('title').classList.remove('hidden'); $('game').classList.add('hidden');
     $('ver').textContent = VERSION;
     $('btnLoad').disabled = !storeGet();
+    $('btnTut').textContent = storeGet(TUT_KEY) ? '튜토리얼 이어하기' : '튜토리얼';
     $('pick').classList.add('hidden');
     drawSeal();
+    if (!askedOnce && !storeGet(SEEN_KEY) && !storeGet()) {
+      askedOnce = true;
+      openModal(`<h3>삼국쟁투에 오신 것을 환영합니다</h3><div class="tutline">${faceImg()}<p>처음이시라면 참모 순욱의 안내를 받으며 5분 정도 연습 판을 해 보시겠어요? 연습 판은 지금 진행 중인 판과 따로 저장됩니다.</p></div>
+        <div class="btnrow"><button class="pri" id="tutYes">예, 튜토리얼부터</button><button id="tutNo">아니요</button></div>`);
+      const seen = () => storeSet('1', SEEN_KEY);
+      $('tutYes').onclick = () => { if (!guard()) return; seen(); closeModal(); startTutorial(); };
+      $('tutNo').onclick = () => { if (!guard()) return; seen(); closeModal(); };
+    }
   }
   function showPick() {
     const box = $('factions'); box.innerHTML = '';
@@ -1349,9 +1476,21 @@ var GUNUNG = (function () {
     enterGame();
     toast('수도는 직접 다스리고, 다른 도시는 태수에게 방침을 맡깁니다.');
   }
+  function startTutorial() {
+    G = K.newTutorial();
+    sel = null;
+    enterGame();
+  }
+  function loadTutorial() {
+    const s = storeGet(TUT_KEY);
+    if (!s) return startTutorial();
+    try { G = K.load(s); } catch (e) { return startTutorial(); }
+    sel = null; enterGame();
+    if (G.tut && G.tut.done && !G.tut.kept) tutFinishAgain(!G.cities.xuchang || G.cities.xuchang.owner !== 'cao');
+  }
   function enterGame() {
     $('title').classList.add('hidden'); $('game').classList.remove('hidden');
-    storeSet(K.save(G));
+    persist();
     render();
   }
 
@@ -1380,8 +1519,12 @@ var GUNUNG = (function () {
       const pr = pn.getBoundingClientRect(), mr = cv.getBoundingClientRect();
       if (pr.left > mr.left + 40) aw = pr.left - mr.left; else ah = Math.max(160, pr.top - mr.top);
     }
+    let top = 0;
+    const tb = $('tut');
+    if (!tb.classList.contains('hidden') && !tutWide()) top = tb.offsetHeight + 8;
+    ah -= top;
     const s = Math.min((aw - pad * 2) / MAP.w, (ah - pad * 2) / MAP.h);
-    mapT = { s, ox: (aw - MAP.w * s) / 2, oy: Math.max(pad, (ah - MAP.h * s) / 2) };
+    mapT = { s, ox: (aw - MAP.w * s) / 2, oy: top + Math.max(pad, (ah - MAP.h * s) / 2) };
     const P = (x, y) => [mapT.ox + x * s, mapT.oy + y * s];
     // 바탕
     ctx.fillStyle = '#d9c9a3';
@@ -1417,6 +1560,13 @@ var GUNUNG = (function () {
       const [x, y] = P(c.x, c.y);
       const col = fcolor(c.owner);
       if (sel === c.id) { ctx.fillStyle = '#fff6'; ctx.beginPath(); ctx.arc(x, y, px * 8, 0, Math.PI * 2); ctx.fill(); }
+      if (tutTargetCity() === c.id) {
+        const a = 0.75 + 0.25 * Math.sin(performance.now() / 260);
+        ctx.strokeStyle = `rgba(242, 160, 20, ${a})`; ctx.lineWidth = Math.max(4, px * 1.6);
+        ctx.beginPath(); ctx.arc(x, y, px * 9.5, 0, Math.PI * 2); ctx.stroke();
+        ctx.strokeStyle = `rgba(255, 245, 200, ${a * 0.8})`; ctx.lineWidth = Math.max(1.5, px * 0.5);
+        ctx.beginPath(); ctx.arc(x, y, px * 9.5, 0, Math.PI * 2); ctx.stroke();
+      }
       drawGrid(ctx, CASTLE, x - px * 5.5, y - px * 5, px, { 1: shade(col, 0.45), 2: '#e9dfc8', 3: col, 0: '#1b1712' });
       const fs = Math.max(11, Math.round(15 * s * 1.1));
       ctx.font = `700 ${fs}px "Noto Serif KR", serif`;
@@ -1446,9 +1596,13 @@ var GUNUNG = (function () {
     $('fname').textContent = pf ? pf.name : '';
     const mine = K.citiesOf(G, G.playerFaction);
     $('res').textContent = `도시 ${mine.length} · 금 ${fmt(mine.reduce((a, c) => a + c.gold, 0))} · 식량 ${fmt(mine.reduce((a, c) => a + c.food, 0))} · 병력 ${fmt(mine.reduce((a, c) => a + c.troops, 0) + G.sieges.filter(s => s.att === G.playerFaction).reduce((a, s) => a + K.armyTroops(s), 0))}`;
+    $('tutBadge').classList.toggle('hidden', !(G.tut && G.tut.protect));
     renderPanel();
     renderSieges();
+    renderTut();
     drawMap();
+    // 미리 해 둔 일(징병 지정, 출진 등)이 있으면 단계를 바로 넘긴다
+    if (inTut() && K.tutCheck(G, { type: 'tick' })) { persist(); if (G.tut.done) tutFinish(false); else render(); }
   }
 
   function renderSieges() {
@@ -1465,8 +1619,8 @@ var GUNUNG = (function () {
         <div class="row"></div>`;
       const row = d.querySelector('.row');
       for (const [o, t] of [['assault', '공격'], ['sabotage', '공작'], ['hold', '유지'], ['retreat', '철수']]) {
-        const b = document.createElement('button'); b.className = 'sm' + (s.order === o ? ' pri' : ''); b.textContent = t;
-        b.onclick = () => { K.siegeOrder(G, s.id, o); renderSieges(); };
+        const b = document.createElement('button'); b.className = 'sm' + (s.order === o ? ' pri' : ''); b.textContent = t; b.dataset.o = o;
+        b.onclick = () => { K.siegeOrder(G, s.id, o); renderSieges(); renderTut(); };
         row.appendChild(b);
       }
       box.appendChild(d);
@@ -1478,6 +1632,7 @@ var GUNUNG = (function () {
   function aptTxt(g) { return ['inf', 'arc', 'cav'].map(t => `${D.UNIT[t].name[0]}<span class="apt ${g.apt[t]}">${g.apt[t]}</span>`).join(' '); }
   function renderPanel() {
     const p = $('panel');
+    $('game').classList.toggle('panel-open', !!sel);
     if (!sel) { p.classList.add('hidden'); return; }
     const c = G.cities[sel];
     const own = c.owner === G.playerFaction;
@@ -1540,7 +1695,7 @@ var GUNUNG = (function () {
     else if (act === 'direct') { c.direct = !c.direct; render(); }
     else if (act === 'policy' && e.type === 'change') { c.policy = t.value; if (c.policy !== 'atk') c.target = null; render(); }
     else if (act === 'target' && e.type === 'change') { c.target = t.value || null; render(); }
-    else if (act === 'task' && e.type === 'change') { const [task, arg] = t.value.split(':'); K.setTask(G, t.dataset.gen, task, arg); renderPanel(); }
+    else if (act === 'task' && e.type === 'change') { const [task, arg] = t.value.split(':'); K.setTask(G, t.dataset.gen, task, arg); persist(); if (!tutEvent({ type: 'task', gen: t.dataset.gen, task })) renderPanel(); }
     else if (act === 'attack') openAttack(c.id, null);
     else if (act === 'attackFrom') openAttack(c.adj.map(id => G.cities[id]).filter(o => o.owner === G.playerFaction).sort((a, b) => b.troops - a.troops)[0].id, c.id);
   }
@@ -1551,20 +1706,20 @@ var GUNUNG = (function () {
     const targets = attackTargets(c);
     if (!targets.length) return;
     const offs = K.officersIn(G, fromId).sort((a, b) => (b.lead + b.war) - (a.lead + a.war));
-    let to = toId && targets.find(o => o.id === toId) ? toId : targets[0].id;
-    const rows = offs.map((g, i) => ({ g, on: i < Math.min(3, offs.length), type: K.bestType(g), troops: 0 }));
+    let to = toId && targets.find(o => o.id === toId) ? toId : (inTut() && targets.some(o => o.id === 'xuchang') ? 'xuchang' : targets[0].id);
+    const def = K.defaultArmy(G, fromId);
+    const rows = offs.map(g => { const d = def.find(u => u.gen === g.id); return { g, on: !!d, type: d ? d.type : K.bestType(g), troops: d ? d.troops : 0 }; });
     const fill = () => {
       const on = rows.filter(r => r.on);
       const pool = Math.floor(c.troops * 0.6);
       const cap = on.reduce((a, r) => a + K.unitCap(r.g), 0) || 1;
       for (const r of rows) r.troops = r.on ? Math.max(100, Math.min(K.unitCap(r.g), Math.floor(pool * K.unitCap(r.g) / cap / 100) * 100)) : 0;
     };
-    fill();
     let tactic = 'normal';
     const draw = () => {
       const tot = rows.reduce((a, r) => a + (r.on ? r.troops : 0), 0);
       const tgt = G.cities[to];
-      let h = `<h3>${esc(c.name)}에서 출진</h3>
+      let h = `<h3>${esc(c.name)}에서 출진</h3>${inTut() ? tutTip(to === 'xuchang' ? '기본으로 채워진 편성 그대로 「출진」을 누르시면 됩니다.' : '목표를 허창으로 바꾸시지요.') : ''}
         <p>목표 <select id="atkTo">${targets.map(o => `<option value="${o.id}" ${o.id === to ? 'selected' : ''}>${esc(o.name)} (${o.owner ? esc(G.factions[o.owner].name) : '공백'}, 병력 ${fmt(o.troops)}, 성벽 ${fmt(o.wall)})</option>`).join('')}</select></p>
         <p class="hint">첫 부대가 총대장입니다. 총대장 부대가 무너지면 나머지 부대 사기가 30 떨어집니다(즉시 패배는 아님). 출진하면 곧바로 성을 포위하고, 다음 턴부터 공격·파괴공작을 고를 수 있습니다. 기병은 사다리를 못 타지만 성문이 깨지면 성 안으로 돌입합니다.</p>`;
       rows.forEach((r, i) => {
@@ -1594,7 +1749,7 @@ var GUNUNG = (function () {
         const units = rows.filter(r => r.on).map(r => ({ gen: r.g.id, type: r.type, troops: r.troops }));
         const s = K.launchAttack(G, fromId, to, units, tactic);
         if (!s) { toast('출진할 수 없습니다. 병력과 장수를 확인하세요.'); return; }
-        closeModal(); sel = to; storeSet(K.save(G)); render();
+        closeModal(); sel = tutWide() ? to : null; persist(); render(); tutEvent({ type: 'march' });
         toast(`${K.J(G.cities[to].name, '을', '를')} 포위했습니다. 다음 턴부터 공격·파괴공작을 고를 수 있습니다.`);
       };
     };
@@ -1604,26 +1759,30 @@ var GUNUNG = (function () {
   // ---------- 턴 종료 ----------
   async function endTurn() {
     if (busy || !G || G.over) return;
+    if (!K.tutCanEndTurn(G)) { shakeTut(); return; }
     busy = true; $('btnEnd').disabled = true;
     const mark = G.log[G.log.length - 1];
     K.endTurn(G);
-    storeSet(K.save(G));
+    persist();
     render();
-    for (const rp of G.replays.slice()) await showBattle(rp);
+    for (const rp of G.replays.slice()) {
+      await showBattle(rp);
+      if (inTut() && rp.title.includes(G.cities.xuchang.name)) tutEvent({ type: 'battle', city: 'xuchang', won: G.cities.xuchang.owner === 'cao' });
+    }
     const idx = G.log.indexOf(mark);
     const list = G.log.slice(idx + 1);
     showReport(list);
-    busy = false; $('btnEnd').disabled = false;
+    busy = false; render();
   }
   function showReport(list) {
     const imp = list.filter(x => x.kind !== 'info' || /재야|장성|세상/.test(x.text));
     const rest = list.length - imp.length;
-    let h = `<h3>${G.year}년 ${G.month}월 보고</h3><div class="log">${imp.map(x => `<p class="${x.kind}">${esc(x.text)}</p>`).join('') || '<p>큰 일은 없었습니다.</p>'}</div>`;
+    let h = `<h3>${G.year}년 ${G.month}월 보고</h3>${inTut() ? tutTip('보고서에는 이번 달에 일어난 일이 모입니다. 「확인」을 누르시지요.') : ''}<div class="log">${imp.map(x => `<p class="${x.kind}">${esc(x.text)}</p>`).join('') || '<p>큰 일은 없었습니다.</p>'}</div>`;
     if (rest > 0) h += `<p class="hint">다른 세력 소식 ${rest}건은 메뉴 → 전체 기록에서 볼 수 있습니다.</p>`;
     if (G.over) h += `<h3 style="margin-top:12px">${G.over === 'win' ? '천하 통일!' : '패배'}</h3>`;
     h += `<div class="btnrow"><button class="pri" id="repOk">${G.over ? '처음 화면으로' : '확인'}</button></div>`;
     openModal(h);
-    $('repOk').onclick = () => { if (!guard()) return; closeModal(); if (G.over) { title(); } };
+    $('repOk').onclick = () => { if (!guard()) return; closeModal(); if (G.over) { title(); return; } if (!tutEvent({ type: 'turn' })) render(); };
   }
 
   // ---------- 전투 관전 ----------
@@ -1727,14 +1886,146 @@ var GUNUNG = (function () {
       <p>세율 <select id="mTax"><option value="low" ${f.tax === 'low' ? 'selected' : ''}>낮음(민심 +1/턴, 금 ×0.7)</option><option value="normal" ${f.tax === 'normal' ? 'selected' : ''}>보통</option><option value="high" ${f.tax === 'high' ? 'selected' : ''}>높음(민심 −1/턴, 금 ×1.35)</option></select></p>
       <p class="hint">3턴마다 각 도시의 남는 금 절반이 수도로 모입니다.</p>
       <table class="mini">${rows}</table>
-      <div class="btnrow"><button id="mLog">전체 기록</button><button id="mSave">저장</button><button id="mTitle">처음 화면</button><button class="pri" id="mClose">닫기</button></div>
+      <div class="btnrow"><button id="mLog">전체 기록</button><button id="mSave">저장</button><button id="mTut">튜토리얼 다시 보기</button><button id="mTitle">처음 화면</button><button class="pri" id="mClose">닫기</button></div>
       <p class="hint">${VERSION} · 게임은 이 브라우저에 자동 저장됩니다.</p>`);
-    $('mTax').onchange = e => { f.tax = e.target.value; storeSet(K.save(G)); render(); };
+    $('mTax').onchange = e => { f.tax = e.target.value; persist(); render(); };
     $('mLog').onclick = () => openModal(`<h3>전체 기록</h3><div class="log">${G.log.slice().reverse().map(x => `<p class="${x.kind}">${x.y}.${x.m} ${esc(x.text)}</p>`).join('')}</div><div class="btnrow"><button class="pri" id="lgOk">닫기</button></div>`, () => { $('lgOk').onclick = closeModal; });
-    $('mSave').onclick = () => { toast(storeSet(K.save(G)) ? '저장했습니다.' : '저장하지 못했습니다(브라우저 저장소 막힘).'); };
-    $('mTitle').onclick = () => { storeSet(K.save(G)); closeModal(); title(); };
+    $('mSave').onclick = () => { toast(persist() ? '저장했습니다.' : '저장하지 못했습니다(브라우저 저장소 막힘).'); };
+    $('mTitle').onclick = () => { persist(); closeModal(); title(); };
     $('mClose').onclick = closeModal;
+    $('mTut').onclick = () => {
+      persist();
+      if (!inTut()) { closeModal(); startTutorial(); return; }
+      openModal(`<h3>연습을 처음부터 할까요?</h3><p>지금 하던 연습(${G.tut.step}/${K.TUT_STEPS.length}단계)은 사라지고 1단계부터 다시 시작합니다.</p>
+        <div class="btnrow"><button class="pri" id="mTutYes">처음부터</button><button id="mTutNo">취소</button></div>`);
+      $('mTutYes').onclick = () => { if (!guard()) return; closeModal(); startTutorial(); };
+      $('mTutNo').onclick = () => { if (guard()) closeModal(); };
+    };
   }
+
+  // ---------- 튜토리얼 ----------
+  // 순욱 얼굴(16×16 코드 도트, 새로 그림): 관모·젊은 문관·푸른 관복
+  const FACE = [
+    '......kkkk......',
+    '.....kkkkkk.....',
+    '..kkkkkkkkkkkk..',
+    '....hhhhhhhh....',
+    '....ssssssss....',
+    '....sesssses....',
+    '....ssssssss....',
+    '.....sssmsss....',
+    '.....ssssss.....',
+    '......ssss......',
+    '....wwbbbbww....',
+    '...bbbwwwwbbb...',
+    '..bbbbbwwbbbbb..',
+    '..bbbbbbbbbbbb..',
+    '.bbbbbbbbbbbbbb.',
+    '.bbbbbbbbbbbbbb.',
+  ];
+  const FACE_PAL = { k: '#1b1712', h: '#2a1f17', s: '#e8c39e', e: '#1b1712', m: '#a8321e', w: '#efe4cc', b: '#2f5d8a' };
+  let faceURL = null;
+  function faceImg() {
+    if (!faceURL) {
+      const c = document.createElement('canvas'); c.width = 16; c.height = 16;
+      drawGrid(c.getContext('2d'), FACE, 0, 0, 1, FACE_PAL);
+      faceURL = c.toDataURL();
+    }
+    return `<img class="face" src="${faceURL}" alt="순욱">`;
+  }
+  const tutWide = () => window.innerWidth >= 900;
+  const tutId = () => (inTut() ? K.TUT_STEPS[G.tut.step - 1].id : null);
+  function tutTip(t) { return `<div class="tutline tip">${faceImg()}<p>${esc(t)}</p></div>`; }
+  function tutTargetCity() {
+    const id = tutId();
+    if (id === 'openCap') return 'chenliu';
+    if (id === 'delegate') return 'puyang';
+    if ((id === 'march' || id === 'recruit') && sel !== 'chenliu') return 'chenliu';
+    return null;
+  }
+  // 지금 단계에서 밝게 강조할 화면 요소
+  function tutTargetEl() {
+    const id = tutId();
+    if (id === 'recruit') return document.querySelector(`#panel select[data-gen="${K.tutRecruiter(G)}"]`);
+    if (id === 'endTurn1' || id === 'siege') return $('btnEnd');
+    if (id === 'march' && sel === 'chenliu') return document.querySelector('#panel [data-act="attack"]');
+    if ((id === 'assault' || id === 'siege') && sel && !tutWide()) return document.querySelector('#panel [data-act="close"]');
+    if (id === 'assault') {
+      const s = G.sieges.find(x => x.att === 'cao' && x.to === 'xuchang');
+      return s && s.order === 'assault' ? $('btnEnd') : document.querySelector('#sieges button[data-o="assault"]');
+    }
+    if (['intro', 'hud', 'stats', 'victory'].includes(id)) return $('tutNext');
+    return null;
+  }
+  function renderTut() {
+    const box = $('tut');
+    document.querySelectorAll('.tut-hl').forEach(el => el.classList.remove('tut-hl'));
+    $('btnEnd').disabled = busy || (!!G && !K.tutCanEndTurn(G));
+    if (!inTut()) { box.classList.add('hidden'); $('sieges').style.top = ''; return; }
+    const st = K.TUT_STEPS[G.tut.step - 1];
+    let todo = st.todo;
+    if (st.id === 'assault') {
+      const s = G.sieges.find(x => x.att === 'cao' && x.to === 'xuchang');
+      const odds = s ? K.assaultOdds(G, s, 12) : 0;
+      if (G.tut.retry) todo = '아쉽게 물러났습니다. 다시 치시지요 — ' + todo;
+      if (odds < 0.9) todo = `예상 승률 ${Math.round(odds * 100)}%로는 이르니, 한 턴 더 에워싸거나 「공작」을 쓰시지요 → 「턴 종료」`;
+      else if (s && s.order === 'assault') todo = '이제 위쪽 「턴 종료」를 누르세요';
+    }
+    if (st.id === 'march' && sel === 'chenliu') todo = '진류 창의 「출진」을 누르세요';
+    if (st.id === 'recruit') {
+      const who = K.tutRecruiter(G);
+      if (who && who !== 'xiahoudun') todo = `하후돈 장군은 이미 출진했으니, ${G.gens[who].name}의 할 일을 「징병」으로 바꾸세요`;
+      if (sel !== 'chenliu') todo = '먼저 지도에서 진류 성을 누르고, ' + todo;
+    }
+    if ((st.id === 'assault' || st.id === 'siege') && sel && !tutWide()) todo = '아래 도시 창을 「닫기」로 닫고 위쪽 포위 판을 보세요';
+    const needNext = ['intro', 'hud', 'stats', 'victory'].includes(st.id);
+    box.innerHTML = `<div class="tutline">${faceImg()}<div><p class="say">${esc(st.say)}</p><p class="todo">▶ ${esc(todo)}</p></div></div>
+      <div class="tutbar"><span>${G.tut.step}/${K.TUT_STEPS.length}</span><span>
+      ${needNext ? `<button class="sm pri" id="tutNext">${st.id === 'victory' ? '연습 마치기' : '다음'}</button>` : ''}
+      <button class="sm" id="tutSkip">건너뛰기</button></span></div>`;
+    box.classList.remove('hidden');
+    if (needNext) $('tutNext').onclick = () => tutEvent({ type: 'next' });
+    $('tutSkip').onclick = () => tutFinish(true);
+    $('sieges').style.top = tutWide() ? '' : (box.offsetHeight + 16) + 'px';
+    const el = tutTargetEl(); if (el) el.classList.add('tut-hl');
+  }
+  function shakeTut() {
+    const b = $('tut'); if (b.classList.contains('hidden')) return;
+    b.classList.remove('shake'); void b.offsetWidth; b.classList.add('shake');
+  }
+  // 사건을 넘기고 단계가 바뀌면 다시 그린다. 바뀌었으면 true
+  function tutEvent(ev) {
+    if (!inTut()) return false;
+    const changed = K.tutCheck(G, ev);
+    if (!changed) { if (ev.type === 'task') shakeTut(); return false; }
+    persist();
+    if (G.tut.done) { tutFinish(false); return true; }
+    render();
+    return true;
+  }
+  // 연습을 끝내거나 건너뛰면: 이 판을 계속하기 / 새 게임
+  function tutFinish(skipped) {
+    if (skipped) K.tutSkip(G); else K.tutDone(G);
+    persist();
+    render();
+    openModal(`<h3>${skipped ? '연습을 건너뛰었습니다' : '연습을 마쳤습니다'}</h3>${tutTip(skipped ? '언제든 메뉴의 「튜토리얼 다시 보기」로 돌아오실 수 있습니다.' : '이제 휴전이 풀렸습니다. 다른 군웅들도 우리를 노릴 것이니 성을 비우지 마시지요.')}
+      <div class="btnrow"><button class="pri" id="tutKeep">이 판을 계속하기</button><button id="tutNew">새 게임 시작</button></div>`);
+    $('tutKeep').onclick = () => {
+      if (!guard()) return;
+      const keep = () => {
+        G.tut.kept = true;
+        if (!storeSet(K.save(G))) { G.tut.kept = false; toast('저장하지 못했습니다(브라우저 저장소가 가득 찼거나 막힘). 연습 판은 그대로 남겨 둡니다.'); return; }
+        storeDel(TUT_KEY); closeModal(); render(); toast('이 판을 본 게임으로 이어 갑니다.');
+      };
+      if (!storeGet()) return keep();
+      openModal(`<h3>진행 중인 판이 있습니다</h3><p>이어하던 본 게임 저장을 이 연습 판으로 덮어쓸까요? 덮어쓰면 예전 판은 되돌릴 수 없습니다.</p>
+        <div class="btnrow"><button class="pri" id="tutOver">덮어쓰기</button><button id="tutBack">취소</button></div>`);
+      $('tutOver').onclick = () => { if (guard()) keep(); };
+      $('tutBack').onclick = () => { if (guard()) tutFinishAgain(skipped); };
+    };
+    $('tutNew').onclick = () => { if (!guard()) return; storeDel(TUT_KEY); closeModal(); G = null; title(); showPick(); };
+  }
+  function tutFinishAgain(skipped) { G.tut.done = true; tutFinish(skipped); }
 
   // ---------- 공통 ----------
   function openModal(html, after) { $('modalBox').innerHTML = html; $('modal').classList.remove('hidden'); modalAt = performance.now(); $('modalBox').scrollTop = 0; if (after) after(); }
@@ -1751,10 +2042,18 @@ var GUNUNG = (function () {
     if (!G) return;
     const r = $('map').getBoundingClientRect();
     const c = cityAt(e.clientX - r.left, e.clientY - r.top);
-    sel = c ? c.id : null; render();
+    sel = c ? c.id : null;
+    if (c && tutEvent({ type: 'select', city: c.id })) return;
+    if (c && inTut() && ['openCap', 'delegate'].includes(tutId())) shakeTut();
+    render();
   });
   window.addEventListener('resize', () => G && drawMap());
-  window.__gunung = { get G() { return G; }, K, endTurn, openAttack };
+  $('btnTut').onclick = loadTutorial;
+  // 지도의 금색 고리를 깜빡이게 한다(튜토리얼 대상 도시가 있을 때만)
+  setInterval(() => { if (G && tutTargetCity() && !$('game').classList.contains('hidden') && $('modal').classList.contains('hidden')) drawMap(); }, 100);
+  // 시험용: 도시의 화면 좌표
+  const cityXY = id => { const r = $('map').getBoundingClientRect(), c = G.cities[id]; return [r.left + mapT.ox + c.x * mapT.s, r.top + mapT.oy + c.y * mapT.s]; };
+  window.__gunung = { get G() { return G; }, K, endTurn, openAttack, cityXY };
   title();
 })();
 </script>
