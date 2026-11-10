@@ -1,6 +1,7 @@
 // ===== 삼국쟁투 규칙 엔진 (화면과 무관, Node에서도 돈다) =====
 var GUNUNG = (function () {
-  const SAVE_VER = 1;
+  const SAVE_VER = 2;
+  const TUT_SEED = 3;
   const SAVE_KEY = 'gunung_save';
   const _hooks = { planCity: null };
 
@@ -37,7 +38,7 @@ var GUNUNG = (function () {
     const G = {
       saveVer: SAVE_VER, year: 191, month: 1, turn: 0, seed: seed || 1, rs: (seed || 1) * 7919 + 13,
       playerFaction: factionId, factions: {}, cities: {}, gens: {}, sieges: [], nextSiege: 1,
-      log: [], opts: Object.assign({ virtual: true }, opts || {}), over: null, replays: [],
+      log: [], opts: Object.assign({ virtual: true }, opts || {}), over: null, replays: [], tut: null,
     };
     for (const f of DATA.FACTIONS) {
       const r = DATA.GENERALS.find(g => g.id === f.ruler);
@@ -66,6 +67,81 @@ var GUNUNG = (function () {
       addLog(G, `${G.factions[factionId].name} 세력으로 천하에 나섰습니다.`);
     } else G.playerFaction = null;
     return G;
+  }
+
+  // ---------- 튜토리얼: 연습 판과 보호 ----------
+  function newTutorial() {
+    const G = newGame('cao', TUT_SEED, { virtual: true });
+    G.tut = { step: 1, protect: true, done: false };
+    return G;
+  }
+  // 튜토리얼 동안 AI가 노리지 못하는 성: 허창과 조조의 성
+  function isProtected(G, cityId) {
+    if (!G.tut || !G.tut.protect) return false;
+    return cityId === 'xuchang' || (G.cities[cityId] && G.cities[cityId].owner === 'cao');
+  }
+  function tutSkip(G) { if (G.tut) { G.tut.protect = false; G.tut.done = true; } }
+
+  // 11단계. say = 순욱의 말, todo = ▶ 할 일 한 줄
+  const TUT_STEPS = [
+    { id: 'intro', say: '주공, 동탁이 천하를 어지럽히니 우리도 기반을 다져야 합니다. 먼저 남쪽의 빈 성 허창을 손에 넣으시지요.', todo: '「다음」을 누르세요' },
+    { id: 'hud', say: '위쪽에는 날짜와 우리 세력의 금·식량·병력이 있고, 지도에는 성마다 주인의 색과 병력이 보입니다.', todo: '「다음」을 누르세요' },
+    { id: 'openCap', say: '먼저 우리의 근거지 진류를 살펴보시지요.', todo: '지도에서 진류 성을 누르세요' },
+    { id: 'stats', say: '인구가 많을수록 병사를 많이 뽑을 수 있고, 민심이 낮으면 세금과 징병이 줄어듭니다.', todo: '「다음」을 누르세요' },
+    { id: 'recruit', say: '수도의 장수에게는 직접 일을 맡깁니다. 하후돈 장군에게 병사를 모으게 하시지요.', todo: '하후돈의 할 일을 「징병」으로 바꾸세요' },
+    { id: 'delegate', say: '다른 성은 태수에게 방침만 내리시면 됩니다. 복양을 보시지요.', todo: '지도에서 복양 성을 누르세요' },
+    { id: 'endTurn1', say: '한 달을 보내 보시지요. 맡긴 일은 바꾸실 때까지 계속됩니다.', todo: '위쪽 「턴 종료」를 누르고, 보고서는 「확인」', endTurn: true },
+    { id: 'march', say: '이제 출진입니다. 첫 부대가 총대장이 되며, 기병은 궁병에 강하고 보병은 기병에 강합니다.', todo: '진류를 누르고 「출진」 → 목표 허창 → 「출진」' },
+    { id: 'siege', say: '성은 곧바로 치지 않고 먼저 에워쌉니다. 에워쌀수록 성안의 식량과 사기가 떨어집니다.', todo: '「턴 종료」를 누르세요(포위 2턴째까지)', endTurn: true },
+    { id: 'assault', say: '포위 판에 「지금 치면 예상 승률」이 보입니다. 이만하면 충분합니다.', todo: '포위 판의 「공격」을 누르고 「턴 종료」', endTurn: true },
+    { id: 'victory', say: '사다리를 걸고 성문을 부수면 기병이 성안으로 돌입합니다. 허창을 얻었습니다. 감축드립니다, 주공!', todo: '「다음」을 누르면 연습이 끝납니다' },
+  ];
+  const TUT_SIEGE_TURNS = 2;
+  function tutDone(G) { if (G.tut) { G.tut.protect = false; G.tut.done = true; } }
+  // 5단계에서 징병을 맡길 장수: 하후돈, 없으면 진류에서 통솔이 가장 높은 장수
+  function tutRecruiter(G) {
+    const here = officersIn(G, 'chenliu');
+    if (here.some(g => g.id === 'xiahoudun')) return 'xiahoudun';
+    const best = here.sort((a, b) => b.lead - a.lead)[0];
+    return best ? best.id : null;
+  }
+  const tutStepId = G => (G.tut && !G.tut.done ? TUT_STEPS[G.tut.step - 1].id : null);
+  function tutCanEndTurn(G) {
+    const id = tutStepId(G);
+    return !id || !!TUT_STEPS[G.tut.step - 1].endTurn;
+  }
+  // 사건 ev가 들어올 때마다 단계를 판정한다. 단계가 바뀌면 true
+  function tutCheck(G, ev) {
+    const id = tutStepId(G);
+    if (!id) return false;
+    const before = G.tut.step;
+    const go = n => { G.tut.step = n; };
+    const siege = G.sieges.find(s => s.att === 'cao' && s.to === 'xuchang');
+    const won = G.cities.xuchang.owner === 'cao';
+    switch (id) {
+      case 'intro': case 'hud': case 'stats': if (ev.type === 'next') go(before + 1); break;
+      case 'openCap': if (ev.type === 'select' && ev.city === 'chenliu') go(4); break;
+      case 'recruit': {
+        // 하후돈이 진류에 없으면(먼저 출진 등) 진류의 어느 장수든 징병이면 된다
+        const xh = G.gens.xiahoudun, here = officersIn(G, 'chenliu');
+        const ok = here.includes(xh) ? xh.task === 'recruit' : here.some(g => g.task === 'recruit');
+        if (ok) go(6);
+        break;
+      }
+      case 'delegate': if (ev.type === 'select' && ev.city === 'puyang') go(7); break;
+      case 'endTurn1': if (ev.type === 'turn') go(8); break;
+      case 'march': if (won) go(11); else if (siege) { G.tut.retry = false; go(9); } break;
+      case 'siege': case 'assault':
+        if (ev.type === 'battle' && !ev.won) G.tut.retry = true;
+        if (won) go(11);
+        else if (!siege) go(8);
+        else if (id === 'siege' && siege.turns >= TUT_SIEGE_TURNS) go(10);
+        break;
+      case 'victory': if (ev.type === 'next') { tutDone(G); return true; } break;
+    }
+    // 허창을 얻는 즉시 휴전·보호를 푼다(마무리 창은 「다음」에서)
+    if (G.tut.step === 11) G.tut.protect = false;
+    return G.tut.step !== before;
   }
 
   function addLog(G, text, kind) {
@@ -286,7 +362,7 @@ var GUNUNG = (function () {
     if (c.troops < 15000) return { policy: 'mil' };
     if (c.owner !== G.playerFaction) {
       const mine = attackPotential(G, c);
-      const tgt = fronts.map(o => ({ o, d: defenseOf(G, o) })).sort((a, b) => a.d - b.d)[0];
+      const tgt = fronts.filter(o => !isProtected(G, o.id)).map(o => ({ o, d: defenseOf(G, o) })).sort((a, b) => a.d - b.d)[0];
       if (tgt && mine > tgt.d * AI_ATK_POLICY) return { policy: 'atk', target: tgt.o.id };
     }
     return { policy: c.troops < c.pop * RECRUIT_CAP * 0.7 ? 'mil' : 'def' };
@@ -328,6 +404,7 @@ var GUNUNG = (function () {
       if (!c.owner || c.direct || !c.cur || c.cur.policy !== 'atk') continue;
       if (c.owner === G.playerFaction && c.policy !== 'atk') continue;
       const t = G.cities[c.cur.target];
+      if (t && c.owner !== G.playerFaction && isProtected(G, t.id)) continue;
       if (!t || t.owner === c.owner || G.sieges.some(s => s.from === c.id || (s.to === t.id && s.att === c.owner))) continue;
       const offs = officersIn(G, c.id).sort((a, b) => (b.lead + b.war) - (a.lead + a.war));
       if (!offs.length) continue;
@@ -360,6 +437,16 @@ var GUNUNG = (function () {
       const g = officersIn(G, give.id).filter(x => x.id !== f.ruler).sort((a, b) => (b.lead + b.war) - (a.lead + a.war))[0];
       if (g) g.city = need.id;
     }
+  }
+
+  // 출진 창 기본값(화면·튜토리얼·시험이 같은 값을 쓴다): 통솔+무력 상위 3명, 각자 잘 맞는 병종, 성 병력 60%를 통솔 한도 비례로
+  function defaultArmy(G, fromId) {
+    const c = G.cities[fromId];
+    const offs = officersIn(G, fromId).sort((a, b) => (b.lead + b.war) - (a.lead + a.war)).slice(0, 3);
+    if (!offs.length) return [];
+    const pool = Math.floor(c.troops * 0.6);
+    const cap = offs.reduce((a, g) => a + unitCap(g), 0);
+    return offs.map(g => ({ gen: g.id, type: bestType(g), troops: Math.max(100, Math.min(unitCap(g), Math.floor(pool * unitCap(g) / cap / 100) * 100)) }));
   }
 
   // ---------- 출진과 포위 ----------
@@ -967,12 +1054,17 @@ var GUNUNG = (function () {
       o.replays = o.replays || [];
       o.saveVer = 1;
     }
+    if (o.saveVer < 2) {
+      o.tut = o.tut || null;
+      o.saveVer = 2;
+    }
     return o;
   }
   function load(str) { return migrate(JSON.parse(str)); }
 
   return {
     SAVE_VER, SAVE_KEY, DATA, TASKS, _hooks, W, H, WALL_X, GATE_Y,
+    TUT_SEED, TUT_STEPS, TUT_SIEGE_TURNS, newTutorial, isProtected, tutSkip, tutDone, tutCheck, tutCanEndTurn, tutRecruiter, defaultArmy,
     makeRng, newGame, endTurn, setTask, planCity, aiPolicy, effectivePolicy, launchAttack, siegeOrder, tickSieges,
     recruitAmount, doRecruit, woundedFrom, healWounded, towersFor, sabotage, makeVirtual, yearlyTalent,
     simulateBattle, battleState, routUnit, canClimb, counter, save, load, migrate, unitCap, bestType,

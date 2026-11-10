@@ -48,6 +48,7 @@ def run(view, opts):
     with sync_playwright() as p:
         b = p.chromium.launch()
         ctx = b.new_context(**opts)
+        ctx.add_init_script("localStorage.setItem('samguk_seen', '1')")
         page = ctx.new_page()
         page.on("pageerror", lambda e: rep["errors"].append("pageerror: " + str(e)))
         page.on("console", lambda m: m.type == "error" and rep["errors"].append("console: " + m.text))
@@ -100,6 +101,7 @@ def run(view, opts):
         page.click("#mClose")
         date2 = page.inner_text("#date")
         # 이어하기
+        page.wait_for_timeout(1500)  # 브라우저가 저장을 디스크에 쓸 시간(휴대폰 흉내에서 바로 새로고침하면 저장이 늦게 반영됨)
         page.reload()
         page.wait_for_timeout(300)
         enabled = page.is_enabled("#btnLoad")
