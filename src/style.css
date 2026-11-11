@@ -111,3 +111,12 @@ table.mini td, table.mini th { padding: 4px; border-bottom: 1px solid #d8c7a2; t
 .badge { font-size: 12px; background: #c9a24a; color: #1b1712; padding: 2px 7px; border-radius: 10px; font-family: var(--ui); }
 #top .when .badge { color: #1b1712; font-weight: 700; }
 @media (max-width: 899px) { #game.panel-open #sieges { display: none; } .scard { font-size: 12px; padding: 6px 8px; } }
+#top .when .badge.coal { background: #c0281b; color: #fff4e0; }
+@media (max-width: 560px) {
+  #top { gap: 6px; padding-left: 8px; padding-right: 4px; }
+  #top .when { min-width: 0; overflow: hidden; white-space: nowrap; }
+  #top .when .badge { font-size: 11px; padding: 1px 5px; }
+  #top .when:has(.badge:not(.hidden)) #fname { display: none; }
+  .end { padding: 6px 10px; font-size: 14px; }
+  button.icon { padding: 4px 6px; }
+}

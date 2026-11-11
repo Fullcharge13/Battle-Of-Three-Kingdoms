@@ -1,7 +1,7 @@
 // ===== 삼국쟁투 화면 =====
 (function () {
   const K = GUNUNG, D = K.DATA;
-  const VERSION = 'v0.2';
+  const VERSION = 'v0.3';
   const $ = id => document.getElementById(id);
   const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const fmt = n => Math.round(n).toLocaleString('ko-KR');
@@ -170,8 +170,19 @@
       ctx.strokeStyle = fcolor(sg.att); ctx.lineWidth = Math.max(2, 5 * s);
       ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x1 + (x2 - x1) * 0.82, y1 + (y2 - y1) * 0.82); ctx.stroke();
     }
+    // 수송 행렬: 지금 칸과 다음 칸 사이에 작은 깃발
+    for (const v of G.convoys || []) {
+      const a = G.cities[v.path[v.at]], b = G.cities[v.path[Math.min(v.at + 1, v.path.length - 1)]];
+      const [x1, y1] = P(a.x, a.y), [x2, y2] = P(b.x, b.y);
+      const x = x1 + (x2 - x1) * 0.5, y = y1 + (y2 - y1) * 0.5;
+      const k = Math.max(1.5, 2.6 * s * 1.2);
+      ctx.fillStyle = '#3d3326'; ctx.fillRect(x - k * 0.5, y - k * 6, k, k * 7);
+      ctx.fillStyle = fcolor(v.owner); ctx.fillRect(x + k * 0.5, y - k * 6, k * 4, k * 3);
+      ctx.strokeStyle = '#1b1712'; ctx.lineWidth = 1; ctx.strokeRect(x + k * 0.5, y - k * 6, k * 4, k * 3);
+    }
     // 도시
     const px = Math.max(2, Math.round(4 * s * 1.2));
+    const hegemon = G.coalition ? G.coalition.target : null;
     ctx.textAlign = 'center';
     for (const c of Object.values(G.cities)) {
       const [x, y] = P(c.x, c.y);
@@ -183,6 +194,10 @@
         ctx.beginPath(); ctx.arc(x, y, px * 9.5, 0, Math.PI * 2); ctx.stroke();
         ctx.strokeStyle = `rgba(255, 245, 200, ${a * 0.8})`; ctx.lineWidth = Math.max(1.5, px * 0.5);
         ctx.beginPath(); ctx.arc(x, y, px * 9.5, 0, Math.PI * 2); ctx.stroke();
+      }
+      if (hegemon && c.owner === hegemon) {
+        ctx.strokeStyle = '#c0281b'; ctx.lineWidth = Math.max(2, px * 0.8);
+        ctx.strokeRect(x - px * 6.2, y - px * 5.7, px * 12.4, px * 9.4);
       }
       drawGrid(ctx, CASTLE, x - px * 5.5, y - px * 5, px, { 1: shade(col, 0.45), 2: '#e9dfc8', 3: col, 0: '#1b1712' });
       const fs = Math.max(11, Math.round(15 * s * 1.1));
@@ -212,8 +227,18 @@
     $('date').textContent = `${G.year}년 ${G.month}월`;
     $('fname').textContent = pf ? pf.name : '';
     const mine = K.citiesOf(G, G.playerFaction);
-    $('res').textContent = `도시 ${mine.length} · 금 ${fmt(mine.reduce((a, c) => a + c.gold, 0))} · 식량 ${fmt(mine.reduce((a, c) => a + c.food, 0))} · 병력 ${fmt(mine.reduce((a, c) => a + c.troops, 0) + G.sieges.filter(s => s.att === G.playerFaction).reduce((a, s) => a + K.armyTroops(s), 0))}`;
+    $('res').textContent = `도시 ${mine.length} · 금 ${fmt(mine.reduce((a, c) => a + c.gold, 0))} · 식량 ${fmt(mine.reduce((a, c) => a + c.food, 0))} · 병력 ${fmt(mine.reduce((a, c) => a + c.troops, 0) + G.sieges.filter(s => s.att === G.playerFaction).reduce((a, s) => a + K.armyTroops(s), 0) + convoyTroops(G.playerFaction))}`;
     $('tutBadge').classList.toggle('hidden', !(G.tut && G.tut.protect));
+    const k = G.coalition, cb = $('coalBadge');
+    cb.classList.toggle('hidden', !k);
+    if (k) {
+      const me = G.playerFaction;
+      const role = k.target === me ? '표적: 우리' : k.members.includes(me) ? '우리도 참가' : k.left.includes(me) ? '우리는 이탈' : '';
+      // 휴대폰에서는 짧게(우리 역할을 한 글자 표시로)
+      const short = k.target === me ? ' ⚠' : k.members.includes(me) ? ' ✓' : '';
+      cb.textContent = `반${G.factions[k.target].name} 연합${role ? (window.innerWidth >= 560 ? ' · ' + role : short) : ''}`;
+      cb.title = role;
+    }
     renderPanel();
     renderSieges();
     renderTut();
@@ -231,7 +256,7 @@
       d.className = 'scard';
       const ord = { hold: '포위 유지', assault: '공격', sabotage: '파괴공작', retreat: '철수' }[s.order];
       d.innerHTML = `<b>${esc(c.name)} 포위</b> ${s.turns}턴째 · 아군 ${fmt(K.armyTroops(s))}<br>
-        성벽 ${fmt(c.wall)}/${fmt(c.wallMax)} (수성 시설 ${K.towersFor(c.wall)}) · 수비 사기 ${s.defMorale} · 식량 ${fmt(c.food)}<br>
+        성벽 ${fmt(c.wall)}/${fmt(c.wallMax)} (수성 시설 ${K.towersFor(c.wallMax)}, 위력 ${Math.round(K.towerPower(c.wall, c.wallMax) * 100)}%) · 수비 사기 ${s.defMorale} · 식량 ${fmt(c.food)}<br>
         지금 치면 예상 승률 <b>${Math.round(odds * 100)}%</b> · 이번 턴: <b>${ord}</b>
         <div class="row"></div>`;
       const row = d.querySelector('.row');
@@ -245,7 +270,7 @@
   }
 
   // ---------- 도시 창 ----------
-  const POLICY = { auto: '알아서(태수 판단)', dev: '개발', mil: '징병·훈련', def: '방어', atk: '공략' };
+  const POLICY = { auto: '알아서(태수 판단)', dev: '개발', mil: '징병·훈련', def: '방어', atk: '공략', sup: '전선 지원(병력 보내기)' };
   function aptTxt(g) { return ['inf', 'arc', 'cav'].map(t => `${D.UNIT[t].name[0]}<span class="apt ${g.apt[t]}">${g.apt[t]}</span>`).join(' '); }
   function renderPanel() {
     const p = $('panel');
@@ -264,11 +289,12 @@
     const ronin = K.roninIn(G, c.id);
     if (own) {
       h += `<div class="btnrow"><button class="sm" data-act="direct">${c.direct ? '태수에게 맡기기' : '직접 다스리기'}</button>
+        <button class="sm" data-act="send" ${sendTargets(c).length ? '' : 'disabled'}>병력 보내기</button>
         <button class="sm pri" data-act="attack" ${attackTargets(c).length && offs.length ? '' : 'disabled'}>출진</button></div>`;
       if (!c.direct) {
         h += `<div class="sec"><h4>태수 방침</h4><select data-act="policy">${Object.entries(POLICY).map(([k, v]) => `<option value="${k}" ${c.policy === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
           ${c.policy === 'atk' ? `<select data-act="target">${['<option value="">목표 선택</option>'].concat(attackTargets(c).map(o => `<option value="${o.id}" ${c.target === o.id ? 'selected' : ''}>${esc(o.name)}</option>`)).join('')}</select>` : ''}
-          <p class="hint">태수는 방침에 맞게 장수들에게 일을 나눕니다. 공략 방침은 우세할 때 스스로 출진합니다. 적 세력도 같은 규칙으로 움직입니다.</p></div>`;
+          <p class="hint">태수는 방침에 맞게 장수들에게 일을 나눕니다. 공략 방침은 우세할 때 스스로 출진하고, 전선 지원 방침은 3턴마다 남는 병력의 절반을 가장 위험한 전선으로 보냅니다. 적 세력도 같은 규칙으로 움직입니다.</p></div>`;
       }
       h += `<div class="sec"><h4>장수 ${offs.length}명 ${c.direct ? '— 할 일을 고르세요(계속 유지됩니다)' : ''}</h4>`;
       for (const g of offs) {
@@ -314,8 +340,11 @@
     else if (act === 'target' && e.type === 'change') { c.target = t.value || null; render(); }
     else if (act === 'task' && e.type === 'change') { const [task, arg] = t.value.split(':'); K.setTask(G, t.dataset.gen, task, arg); persist(); if (!tutEvent({ type: 'task', gen: t.dataset.gen, task })) renderPanel(); }
     else if (act === 'attack') openAttack(c.id, null);
+    else if (act === 'send') openSend(c.id);
     else if (act === 'attackFrom') openAttack(c.adj.map(id => G.cities[id]).filter(o => o.owner === G.playerFaction).sort((a, b) => b.troops - a.troops)[0].id, c.id);
   }
+
+  const convoyTroops = fid => (G.convoys || []).filter(v => v.owner === fid).reduce((a, v) => a + v.troops, 0);
 
   // ---------- 출진 ----------
   function openAttack(fromId, toId) {
@@ -336,7 +365,8 @@
     const draw = () => {
       const tot = rows.reduce((a, r) => a + (r.on ? r.troops : 0), 0);
       const tgt = G.cities[to];
-      let h = `<h3>${esc(c.name)}에서 출진</h3>${inTut() ? tutTip(to === 'xuchang' ? '기본으로 채워진 편성 그대로 「출진」을 누르시면 됩니다.' : '목표를 허창으로 바꾸시지요.') : ''}
+      const leaving = G.coalition && G.coalition.members.includes(G.playerFaction) && G.coalition.members.includes(G.cities[to].owner);
+      let h = `<h3>${esc(c.name)}에서 출진</h3>${leaving ? `<p class="hint" style="color:#a8321e"><b>주의:</b> ${esc(K.J(G.factions[G.cities[to].owner].name, '은', '는'))} 우리와 같은 연합입니다. 출진하면 우리는 연합에서 빠지고, 이 연합이 끝날 때까지 다시 들어갈 수 없습니다.</p>` : ''}${inTut() ? tutTip(to === 'xuchang' ? '기본으로 채워진 편성 그대로 「출진」을 누르시면 됩니다.' : '목표를 허창으로 바꾸시지요.') : ''}
         <p>목표 <select id="atkTo">${targets.map(o => `<option value="${o.id}" ${o.id === to ? 'selected' : ''}>${esc(o.name)} (${o.owner ? esc(G.factions[o.owner].name) : '공백'}, 병력 ${fmt(o.troops)}, 성벽 ${fmt(o.wall)})</option>`).join('')}</select></p>
         <p class="hint">첫 부대가 총대장입니다. 총대장 부대가 무너지면 나머지 부대 사기가 30 떨어집니다(즉시 패배는 아님). 출진하면 곧바로 성을 포위하고, 다음 턴부터 공격·파괴공작을 고를 수 있습니다. 기병은 사다리를 못 타지만 성문이 깨지면 성 안으로 돌입합니다.</p>`;
       rows.forEach((r, i) => {
@@ -368,6 +398,41 @@
         if (!s) { toast('출진할 수 없습니다. 병력과 장수를 확인하세요.'); return; }
         closeModal(); sel = tutWide() ? to : null; persist(); render(); tutEvent({ type: 'march' });
         toast(`${K.J(G.cities[to].name, '을', '를')} 포위했습니다. 다음 턴부터 공격·파괴공작을 고를 수 있습니다.`);
+      };
+    };
+    draw();
+  }
+
+  // ---------- 병력 보내기 ----------
+  function sendTargets(c) { return K.citiesOf(G, c.owner).filter(o => o.id !== c.id && K.ownPath(G, c.id, o.id)); }
+  function openSend(fromId) {
+    const c = G.cities[fromId];
+    const tg = sendTargets(c);
+    if (!tg.length) return;
+    const max = Math.max(0, c.troops - 3000);
+    let to = tg[0].id, n = Math.min(max, Math.max(500, Math.floor(max / 2 / 100) * 100));
+    const draw = () => {
+      const hops = K.ownPath(G, fromId, to).length - 1;
+      const food = Math.round(hops * n * 0.02);
+      const ok = max >= 500 && n >= 500 && n <= max && c.food >= food && !G.sieges.some(s => s.to === fromId);
+      openModal(`<h3>${esc(c.name)}에서 병력 보내기</h3>
+        <p>목적지 <select id="sendTo">${tg.map(o => `<option value="${o.id}" ${o.id === to ? 'selected' : ''}>${esc(o.name)} (병력 ${fmt(o.troops)}, ${K.ownPath(G, fromId, o.id).length - 1}턴)</option>`).join('')}</select></p>
+        <p>보낼 병력 <input type="range" id="sendN" min="500" max="${Math.max(500, max)}" step="100" value="${n}" ${max < 500 ? 'disabled' : ''}> <b id="sendNv">${fmt(n)}</b></p>
+        <p class="hint">장수 없이 병사만 갑니다. 아군 성만 지나 한 칸에 한 턴씩 걸리고, 칸마다 보내는 병력의 2%만큼 식량이 듭니다. 이 성에는 최소 3,000명을 남겨야 하며, 가는 길이 끊기면 가장 가까운 아군 성으로 돌아갑니다.</p>
+        <p>걸리는 시간 <b>${hops}턴</b> · 드는 식량 <b>${fmt(food)}</b> (보유 ${fmt(c.food)}) · 남는 병력 <b>${fmt(c.troops - n)}</b>
+          ${max < 500 ? '<br><b style="color:#a8321e">보낼 수 있는 병력이 없습니다(최소 3,000명은 남겨야 함)</b>' : ''}${c.food < food ? '<br><b style="color:#a8321e">식량이 모자랍니다</b>' : ''}${G.sieges.some(s => s.to === fromId) ? '<br><b style="color:#a8321e">포위당한 성에서는 보낼 수 없습니다</b>' : ''}</p>
+        <div class="btnrow"><button class="pri" id="sendGo" ${ok ? '' : 'disabled'}>보내기</button><button id="sendNo">취소</button></div>`);
+      $('sendTo').onchange = e => { to = e.target.value; draw(); };
+      const r = $('sendN');
+      r.oninput = () => { n = +r.value; $('sendNv').textContent = fmt(n); };
+      r.onchange = () => { n = +r.value; draw(); };
+      $('sendNo').onclick = closeModal;
+      $('sendGo').onclick = () => {
+        if (!guard()) return;
+        const v = K.sendTroops(G, fromId, to, n);
+        if (!v) { toast('보낼 수 없습니다. 병력·식량·길을 확인하세요.'); return; }
+        closeModal(); persist(); render();
+        toast(`${fmt(n)}명이 ${K.J(G.cities[to].name, '으로', '로')} 출발했습니다(${hops}턴 뒤 도착).`);
       };
     };
     draw();
@@ -497,7 +562,7 @@
     const f = G.factions[G.playerFaction];
     const rows = Object.values(G.factions).filter(x => x.alive).map(x => {
       const cs = K.citiesOf(G, x.id);
-      return `<tr><td style="color:${x.color}">■</td><td>${esc(x.name)}</td><td>도시 ${cs.length}</td><td>병력 ${fmt(cs.reduce((a, c) => a + c.troops, 0))}</td><td>장수 ${Object.values(G.gens).filter(g => g.alive && g.faction === x.id).length}</td></tr>`;
+      return `<tr><td style="color:${x.color}">■</td><td>${esc(x.name)}</td><td>도시 ${cs.length}</td><td>병력 ${fmt(cs.reduce((a, c) => a + c.troops, 0) + convoyTroops(x.id))}</td><td>장수 ${Object.values(G.gens).filter(g => g.alive && g.faction === x.id).length}</td><td>${G.coalition ? (G.coalition.target === x.id ? '연합의 표적' : G.coalition.members.includes(x.id) ? '연합' : G.coalition.left.includes(x.id) ? '이탈' : '') : ''}</td></tr>`;
     }).join('');
     openModal(`<h3>메뉴</h3>
       <p>세율 <select id="mTax"><option value="low" ${f.tax === 'low' ? 'selected' : ''}>낮음(민심 +1/턴, 금 ×0.7)</option><option value="normal" ${f.tax === 'normal' ? 'selected' : ''}>보통</option><option value="high" ${f.tax === 'high' ? 'selected' : ''}>높음(민심 −1/턴, 금 ×1.35)</option></select></p>
@@ -670,6 +735,6 @@
   setInterval(() => { if (G && tutTargetCity() && !$('game').classList.contains('hidden') && $('modal').classList.contains('hidden')) drawMap(); }, 100);
   // 시험용: 도시의 화면 좌표
   const cityXY = id => { const r = $('map').getBoundingClientRect(), c = G.cities[id]; return [r.left + mapT.ox + c.x * mapT.s, r.top + mapT.oy + c.y * mapT.s]; };
-  window.__gunung = { get G() { return G; }, K, endTurn, openAttack, cityXY };
+  window.__gunung = { get G() { return G; }, K, endTurn, openAttack, cityXY, render: () => render() };
   title();
 })();

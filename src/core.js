@@ -1,6 +1,6 @@
 // ===== 삼국쟁투 규칙 엔진 (화면과 무관, Node에서도 돈다) =====
 var GUNUNG = (function () {
-  const SAVE_VER = 2;
+  const SAVE_VER = 3;
   const TUT_SEED = 3;
   const SAVE_KEY = 'gunung_save';
   const _hooks = { planCity: null };
@@ -38,7 +38,7 @@ var GUNUNG = (function () {
     const G = {
       saveVer: SAVE_VER, year: 191, month: 1, turn: 0, seed: seed || 1, rs: (seed || 1) * 7919 + 13,
       playerFaction: factionId, factions: {}, cities: {}, gens: {}, sieges: [], nextSiege: 1,
-      log: [], opts: Object.assign({ virtual: true }, opts || {}), over: null, replays: [], tut: null,
+      log: [], opts: Object.assign({ virtual: true }, opts || {}), over: null, replays: [], tut: null, convoys: [], nextConvoy: 1, coalition: null, stats: { launch: 0, assault: 0, convoy: 0 },
     };
     for (const f of DATA.FACTIONS) {
       const r = DATA.GENERALS.find(g => g.id === f.ruler);
@@ -168,8 +168,8 @@ var GUNUNG = (function () {
     return best;
   }
   const unitCap = g => Math.round(g.lead * 250);
-  let RECRUIT_CAP = 0.18, AI_ATK_POLICY = 0.9, AI_ATK_GO = 0.85;
-  function tuneAI(o) { if ('RECRUIT_CAP' in o) RECRUIT_CAP = o.RECRUIT_CAP; if ('AI_ATK_POLICY' in o) AI_ATK_POLICY = o.AI_ATK_POLICY; if ('AI_ATK_GO' in o) AI_ATK_GO = o.AI_ATK_GO; }
+  let RECRUIT_CAP = 0.18, AI_ATK_POLICY = 0.9, AI_ATK_GO = 0.85, AI_FIRST_YEAR = 2.2, AI_POOL = 0.65;
+  function tuneAI(o) { if ('RECRUIT_CAP' in o) RECRUIT_CAP = o.RECRUIT_CAP; if ('AI_ATK_POLICY' in o) AI_ATK_POLICY = o.AI_ATK_POLICY; if ('AI_ATK_GO' in o) AI_ATK_GO = o.AI_ATK_GO; if ('AI_POOL' in o) AI_POOL = o.AI_POOL; if ('COAL_ON' in o) COAL_ON = o.COAL_ON; if ('AI_FIRST_YEAR' in o) AI_FIRST_YEAR = o.AI_FIRST_YEAR; }
 
   // ---------- 내정 ----------
   function recruitAmount(c, g) {
@@ -194,7 +194,9 @@ var GUNUNG = (function () {
     c.wounded -= back; c.troops += back;
     return back;
   }
-  const towersFor = wall => Math.min(4, Math.floor(wall / 1000));
+  // 수성 시설 수는 성의 최대 성벽으로 정해지고(성마다 고정), 위력은 지금 성벽 비율에 따라 연속으로 줄어든다
+  const towersFor = wallMax => Math.min(4, Math.floor(wallMax / 1000));
+  const towerPower = (wall, wallMax) => 0.2 + 0.8 * clamp(wall / Math.max(1, wallMax), 0, 1);
 
   function sabotage(G, g, city, rng, besieged) {
     const p = 0.4 + (g.int - 50) / 100 + (besieged ? 0.2 : 0);
@@ -356,19 +358,33 @@ var GUNUNG = (function () {
     const offs = officersIn(G, c.id).sort((a, b) => b.lead - a.lead).slice(0, 4);
     return powerOf(Math.min(c.troops * 0.7, offs.reduce((s, g) => s + unitCap(g), 0)), offs);
   }
+  // 「3턴 포위(사기 76) + 공작 2번(성벽 −720)」을 한 뒤의 수비력
+  function preparedDefense(G, cityId) {
+    const c = G.cities[cityId];
+    const wall = Math.max(0, c.wall - 720);
+    return powerOf(c.troops, officersIn(G, c.id).slice(0, 4)) * (1 + 0.8 * wall / 4000) * (0.6 + 0.4 * 0.76);
+  }
+  // AI 공략 기준 배수: 첫해(191년)에는 AI_FIRST_YEAR배 신중(주인 없는 성은 예외). 설계 첫 안 1.3 → 시뮬레이션으로 2.2
+  function aiAttackBar(G, t) { return AI_ATK_GO * (G.year === 191 && t.owner ? AI_FIRST_YEAR : 1); }
+  // 목표로서의 매력: 수비력이 낮을수록 좋은 목표(연합의 표적은 더 쉬워 보이게, 작업 4)
+  const targetScore = (G, c, o) => preparedDefense(G, o.id) / (coalitionBias(G, c.owner, o.owner));
+  function aiTargets(G, c) {
+    return c.adj.map(id => G.cities[id]).filter(o => isEnemy(G, c, o) && !isProtected(G, o.id) && !allied(G, c.owner, o.owner));
+  }
   function aiPolicy(G, c) {
-    const fronts = c.adj.map(id => G.cities[id]).filter(o => isEnemy(G, c, o));
+    const fronts = c.adj.map(id => G.cities[id]).filter(o => isEnemy(G, c, o) && !allied(G, c.owner, o.owner));
     if (!fronts.length) return { policy: 'dev' };
     if (c.troops < 15000) return { policy: 'mil' };
     if (c.owner !== G.playerFaction) {
       const mine = attackPotential(G, c);
-      const tgt = fronts.filter(o => !isProtected(G, o.id)).map(o => ({ o, d: defenseOf(G, o) })).sort((a, b) => a.d - b.d)[0];
-      if (tgt && mine > tgt.d * AI_ATK_POLICY) return { policy: 'atk', target: tgt.o.id };
+      const tgt = aiTargets(G, c).map(o => ({ o, d: targetScore(G, c, o) })).sort((a, b) => a.d - b.d)[0];
+      if (tgt && mine > preparedDefense(G, tgt.o.id) * aiAttackBar(G, tgt.o) * AI_ATK_POLICY / AI_ATK_GO) return { policy: 'atk', target: tgt.o.id };
     }
     return { policy: c.troops < c.pop * RECRUIT_CAP * 0.7 ? 'mil' : 'def' };
   }
   function effectivePolicy(G, c) {
     if (c.policy === 'auto' || c.owner !== G.playerFaction) return aiPolicy(G, c);
+    if (c.policy === 'sup') return { policy: 'sup' };
     if (c.policy === 'atk' && !(c.target && G.cities[c.target] && G.cities[c.target].owner !== c.owner && c.adj.includes(c.target))) return { policy: 'mil' };
     return { policy: c.policy, target: c.target };
   }
@@ -406,19 +422,56 @@ var GUNUNG = (function () {
       const t = G.cities[c.cur.target];
       if (t && c.owner !== G.playerFaction && isProtected(G, t.id)) continue;
       if (!t || t.owner === c.owner || G.sieges.some(s => s.from === c.id || (s.to === t.id && s.att === c.owner))) continue;
+      // AI 세력은 동시에 한 곳만 포위한다
+      if (c.owner !== G.playerFaction && G.sieges.some(s => s.att === c.owner)) continue;
+      if (allied(G, c.owner, t.owner)) continue; // 플레이어 위임 도시도 연합원은 치지 않는다(저절로 탈퇴 방지)
       const offs = officersIn(G, c.id).sort((a, b) => (b.lead + b.war) - (a.lead + a.war));
       if (!offs.length) continue;
       const n = Math.min(4, offs.length > 1 ? offs.length - (offs.length > 2 ? 1 : 0) : 1);
       const pickG = offs.slice(0, n);
-      const pool = Math.round(c.troops * 0.55);
+      const pool = Math.round(c.troops * AI_POOL);
       // 비운 성을 이웃이 노리지 않을 만큼은 남긴다
       const threat = c.adj.map(id => G.cities[id]).filter(o => o.owner && o.owner !== c.owner && o.id !== t.id).reduce((m, o) => Math.max(m, attackPotential(G, o)), 0);
       if (powerOf(c.troops - pool, officersIn(G, c.id).slice(n, n + 2)) * (1 + 0.8 * c.wall / 4000) < threat * 0.35) continue;
       const capSum = pickG.reduce((s, g) => s + unitCap(g), 0);
       const units = pickG.map(g => ({ gen: g.id, type: bestType(g), troops: Math.round(Math.min(unitCap(g), pool * unitCap(g) / capSum)) }));
-      if (powerOf(units.reduce((s, u) => s + u.troops, 0), pickG) < defenseOf(G, t) * AI_ATK_GO * (0.85 + 0.3 * rng())) continue;
+      if (powerOf(units.reduce((s, u) => s + u.troops, 0), pickG) < preparedDefense(G, t.id) * aiAttackBar(G, t) * (0.85 + 0.3 * rng())) continue;
       const s = launchAttack(G, c.id, t.id, units, 'normal');
       if (s) s.auto = true;
+    }
+  }
+
+  // ---------- 병력 모으기(수송 판단) ----------
+  const enemyAdj = (G, c) => c.adj.some(id => G.cities[id].owner !== c.owner && !allied(G, c.owner, G.cities[id].owner));
+  function threatTo(G, c) {
+    return c.adj.map(id => G.cities[id]).filter(o => o.owner && o.owner !== c.owner && !allied(G, c.owner, o.owner)).reduce((m, o) => Math.max(m, attackPotential(G, o)), 0);
+  }
+  // 남는 병력: 이웃 적 공격력의 절반을 막을 만큼(최소 3,000)은 남긴다
+  function spareTroops(G, cityId) {
+    const c = G.cities[cityId];
+    const perTroop = powerOf(1, officersIn(G, c.id).slice(0, 4)) * (1 + 0.8 * c.wall / 4000);
+    const keep = Math.max(CONVOY_KEEP, Math.ceil(threatTo(G, c) * 0.5 / perTroop));
+    return Math.max(0, c.troops - keep);
+  }
+  // 이 도시가 이번에 보낼 수송(목적지, 병력). 보낼 것이 없으면 null
+  function supplyPlan(G, cityId) {
+    const c = G.cities[cityId];
+    if (!c.owner || c.direct || G.sieges.some(s => s.to === c.id)) return null;
+    const isAI = c.owner !== G.playerFaction;
+    if (isAI ? enemyAdj(G, c) : c.policy !== 'sup') return null;
+    const n = Math.floor(spareTroops(G, c.id) * 0.5 / 100) * 100;
+    if (n < CONVOY_MIN) return null;
+    const fronts = citiesOf(G, c.owner).filter(o => o.id !== c.id && enemyAdj(G, o) && ownPath(G, c.id, o.id));
+    if (!fronts.length) return null;
+    const danger = o => threatTo(G, o) / Math.max(1, defenseOf(G, o));
+    const best = fronts.sort((a, b) => ((b.cur && b.cur.policy === 'atk') - (a.cur && a.cur.policy === 'atk')) || danger(b) - danger(a))[0];
+    return { to: best.id, n };
+  }
+  function aiSupply(G) {
+    if (G.turn % 3 !== 0) return;
+    for (const c of Object.values(G.cities)) {
+      const plan = c.owner ? supplyPlan(G, c.id) : null;
+      if (plan) sendTroops(G, c.id, plan.to, plan.n);
     }
   }
 
@@ -449,6 +502,113 @@ var GUNUNG = (function () {
     return offs.map(g => ({ gen: g.id, type: bestType(g), troops: Math.max(100, Math.min(unitCap(g), Math.floor(pool * unitCap(g) / cap / 100) * 100)) }));
   }
 
+  // ---------- 연합: 너무 커진 세력을 이웃들이 함께 견제한다 ----------
+  let COAL_ON = 0.4, COAL_OFF = 0.3, COAL_BIAS = 1.5;
+  function allied(G, a, b) {
+    const k = G.coalition;
+    return !!(k && a && b && a !== b && k.members.includes(a) && k.members.includes(b));
+  }
+  function coalitionBias(G, attacker, owner) {
+    const k = G.coalition;
+    return k && owner === k.target && k.members.includes(attacker) ? COAL_BIAS : 1;
+  }
+  function neighborsOf(G, fid) {
+    const out = new Set();
+    for (const c of citiesOf(G, fid)) for (const id of c.adj) { const o = G.cities[id].owner; if (o && o !== fid) out.add(o); }
+    return out;
+  }
+  function updateCoalition(G) {
+    const total = Object.keys(G.cities).length;
+    const k = G.coalition;
+    if (k) {
+      const tf = G.factions[k.target];
+      const tn = tf ? citiesOf(G, k.target).length : 0;
+      // 다른 세력이 40%를 넘고 표적보다 커졌으면, 이 연합을 풀고 그 세력을 표적으로 새로 짠다
+      const rival = Object.values(G.factions).find(f => f.alive && f.id !== k.target && citiesOf(G, f.id).length / total >= COAL_ON && citiesOf(G, f.id).length > tn);
+      if (!tf || !tf.alive || tn / total < COAL_OFF) {
+        addLog(G, `반${tf ? tf.name : ''} 연합이 해산했습니다.`, 'big');
+        G.coalition = null; // 아래에서 다른 세력이 40%를 넘었는지 바로 다시 본다
+      } else if (rival) {
+        addLog(G, `${J(rival.name, '이', '가')} 반${tf.name} 연합의 표적보다 커져, 연합이 흩어지고 다시 짜입니다.`, 'big');
+        G.coalition = null;
+      } else {
+        for (const f of neighborsOf(G, k.target)) if (!k.members.includes(f) && !k.left.includes(f) && G.factions[f].alive) k.members.push(f);
+        k.members = k.members.filter(f => G.factions[f] && G.factions[f].alive);
+        return;
+      }
+    }
+    if (G.tut && G.tut.protect) return;
+    const big = Object.values(G.factions).filter(f => f.alive && citiesOf(G, f.id).length / total >= COAL_ON)
+      .sort((a, b) => citiesOf(G, b.id).length - citiesOf(G, a.id).length || troopsSum(G, b.id) - troopsSum(G, a.id))[0];
+    if (!big) return;
+    const members = [...neighborsOf(G, big.id)].filter(f => G.factions[f].alive);
+    if (!members.length) return;
+    G.coalition = { target: big.id, members, since: { year: G.year, month: G.month }, left: [] };
+    addLog(G, `반${big.name} 연합 결성! ${J(members.map(f => G.factions[f].name).join('·'), '이', '가')} 손을 잡고 ${J(big.name, '에', '에')} 맞섭니다.`, 'big');
+  }
+  const troopsSum = (G, fid) => citiesOf(G, fid).reduce((a, c) => a + c.troops, 0);
+
+  // ---------- 병력 수송 ----------
+  const CONVOY_MIN = 500, CONVOY_KEEP = 3000, CONVOY_FOOD = 0.02;
+  // 너비 우선 탐색. ok(도시)가 참인 도시만 지나간다(양 끝 포함)
+  function bfsPath(G, fromId, toId, ok) {
+    const prev = { [fromId]: null }, q = [fromId];
+    while (q.length) {
+      const c = q.shift();
+      if (c === toId) break;
+      for (const n of G.cities[c].adj) if (!(n in prev) && ok(G.cities[n])) { prev[n] = c; q.push(n); }
+    }
+    if (!(toId in prev)) return null;
+    const path = [];
+    for (let c = toId; c != null; c = prev[c]) path.unshift(c);
+    return path;
+  }
+  function ownPath(G, fromId, toId) {
+    const owner = G.cities[fromId].owner;
+    if (!owner || G.cities[toId].owner !== owner || fromId === toId) return null;
+    return bfsPath(G, fromId, toId, c => c.owner === owner);
+  }
+  function sendTroops(G, fromId, toId, n) {
+    const from = G.cities[fromId];
+    n = Math.round(n);
+    if (!from || !from.owner || n < CONVOY_MIN || from.troops - n < CONVOY_KEEP) return null;
+    if (G.sieges.some(s => s.to === fromId)) return null;
+    const path = ownPath(G, fromId, toId);
+    if (!path) return null;
+    const food = Math.round((path.length - 1) * n * CONVOY_FOOD);
+    if (from.food < food) return null;
+    from.troops -= n; from.food -= food;
+    const v = { id: G.nextConvoy++, owner: from.owner, path, at: 0, troops: n };
+    G.convoys.push(v);
+    if (G.stats) G.stats.convoy++;
+    return v;
+  }
+  function tickConvoys(G) {
+    for (const v of G.convoys.slice()) {
+      const dest = G.cities[v.path[v.path.length - 1]];
+      const next = G.cities[v.path[v.at + 1]];
+      if (!next || next.owner !== v.owner || dest.owner !== v.owner) {
+        // 길이 끊김: 지금 칸이 아군이면 거기 합류, 아니면 가장 가까운 아군 도시로 방향을 바꿈
+        const cur = G.cities[v.path[v.at]];
+        if (cur.owner === v.owner) { cur.troops += v.troops; G.convoys = G.convoys.filter(x => x !== v); continue; }
+        const own = citiesOf(G, v.owner);
+        let best = null;
+        // 아군 성만 지나는 길을 먼저 찾고, 없을 때만 남의 땅을 지난다
+        for (const anyLand of [false, true]) {
+          for (const o of own) { const p = bfsPath(G, cur.id, o.id, n => anyLand || n.owner === v.owner); if (p && (!best || p.length < best.length)) best = p; }
+          if (best) break;
+        }
+        if (!best) { G.convoys = G.convoys.filter(x => x !== v); if (v.owner === G.playerFaction) addLog(G, `갈 곳을 잃은 수송 병력 ${v.troops}명이 흩어졌습니다.`, 'war'); continue; }
+        v.path = best; v.at = 0;
+      }
+      v.at++;
+      if (v.at >= v.path.length - 1) {
+        const end = G.cities[v.path[v.path.length - 1]];
+        if (end.owner === v.owner) { end.troops += v.troops; G.convoys = G.convoys.filter(x => x !== v); }
+      }
+    }
+  }
+
   // ---------- 출진과 포위 ----------
   function launchAttack(G, fromId, toId, units, tactic) {
     const from = G.cities[fromId], to = G.cities[toId];
@@ -463,6 +623,13 @@ var GUNUNG = (function () {
       total += u.troops;
     }
     if (total > from.troops) return null;
+    // 플레이어가 연합 세력을 먼저 치면 플레이어만 연합에서 빠진다
+    const k = G.coalition;
+    if (k && from.owner === G.playerFaction && allied(G, from.owner, to.owner)) {
+      k.members = k.members.filter(f => f !== from.owner);
+      k.left.push(from.owner);
+      addLog(G, `${G.factions[from.owner].name} 세력이 연합 세력 ${G.factions[to.owner].name}을(를) 공격해 반${G.factions[k.target].name} 연합에서 빠졌습니다.`, 'big');
+    }
     from.troops -= total;
     const s = {
       id: G.nextSiege++, att: from.owner, from: fromId, to: toId, tactic: tactic || 'normal',
@@ -471,6 +638,7 @@ var GUNUNG = (function () {
     };
     for (const u of s.units) { const g = G.gens[u.gen]; g.army = s.id; g.task = 'rest'; g.arg = null; }
     G.sieges.push(s);
+    if (G.stats) G.stats.launch++;
     addLog(G, `${G.factions[from.owner].name} 군이 ${from.name}에서 출진해 ${J(to.name, '을', '를')} 포위했습니다.`, (from.owner === G.playerFaction || to.owner === G.playerFaction) ? 'war' : 'info');
     return s;
   }
@@ -576,6 +744,7 @@ var GUNUNG = (function () {
       if (!defU.length) { captureCity(G, s, c, s.units); continue; }
       const r = simulateBattle(toBattleUnits(G, s.units), toBattleUnits(G, defU), siegeCtx(c, s), makeRng(Math.floor(rng() * 1e9)));
       const defOwner = c.owner || null;
+      if (G.stats) G.stats.assault++;
       applyAssault(G, s, c, defU, r);
       if (involvesPlayer) G.replays.push({ title: `${c.name} 공성전`, result: r, att: s.att, def: defOwner });
     }
@@ -724,12 +893,15 @@ var GUNUNG = (function () {
     if (G.over) return G;
     const rng = grng(G);
     G.replays = [];
+    updateCoalition(G);
     for (const c of Object.values(G.cities)) if (c.owner) (_hooks.planCity || planCity)(G, c.id);
     aiShuffle(G);
     aiMilitary(G, rng);
+    aiSupply(G);
     for (const g of Object.values(G.gens)) if (g.alive && g.faction && !g.army) runTask(G, g, rng);
     tickSieges(G);
     resolveSieges(G, rng);
+    tickConvoys(G);
     economy(G);
     G.turn++;
     G.month++;
@@ -751,12 +923,14 @@ var GUNUNG = (function () {
 
   // ---------- 전투 ----------
   const W = 14, H = 8, WALL_X = 10, GATE_Y = 4;
-    let GATE_K = 0.4, GATE_DMG = 1.5, SIEGE_ROUNDS = 36, WALL_A = 0.25, WALL_B = 0.30, TOWER_DMG = 100, GATE_SHOCK = 5;
+    let GATE_K = 0.6, GATE_DMG = 1.5, SIEGE_ROUNDS = 36, WALL_A = 0.25, WALL_B = 0.30, TOWER_DMG = 120, GATE_SHOCK = 5, SWING = 0.25, GATE_MIN = 350;
   // 시뮬레이션에서 수치를 바꿔 보기 위한 손잡이
-  function tune(o) { if ('GATE_K' in o) GATE_K = o.GATE_K; if ('GATE_DMG' in o) GATE_DMG = o.GATE_DMG; if ('SIEGE_ROUNDS' in o) SIEGE_ROUNDS = o.SIEGE_ROUNDS; if ('WALL_A' in o) WALL_A = o.WALL_A; if ('WALL_B' in o) WALL_B = o.WALL_B; if ('TOWER_DMG' in o) TOWER_DMG = o.TOWER_DMG; if ('GATE_SHOCK' in o) GATE_SHOCK = o.GATE_SHOCK; return { GATE_K, GATE_DMG, SIEGE_ROUNDS, WALL_A, WALL_B, TOWER_DMG, GATE_SHOCK }; }
+  function tune(o) { if ('GATE_K' in o) GATE_K = o.GATE_K; if ('GATE_DMG' in o) GATE_DMG = o.GATE_DMG; if ('SIEGE_ROUNDS' in o) SIEGE_ROUNDS = o.SIEGE_ROUNDS; if ('WALL_A' in o) WALL_A = o.WALL_A; if ('WALL_B' in o) WALL_B = o.WALL_B; if ('TOWER_DMG' in o) TOWER_DMG = o.TOWER_DMG; if ('GATE_SHOCK' in o) GATE_SHOCK = o.GATE_SHOCK; if ('SWING' in o) SWING = o.SWING; if ('GATE_MIN' in o) GATE_MIN = o.GATE_MIN; return { GATE_K, GATE_DMG, SIEGE_ROUNDS, WALL_A, WALL_B, TOWER_DMG, GATE_SHOCK, SWING, GATE_MIN }; }
   const canClimb = t => t !== 'cav';
   const counter = (a, d) => DATA.COUNTER[a][d];
 
+  // 성문 체력: 성벽이 0이어도 문짝은 남는다(바닥값)
+  const gateHpOf = ctx => Math.round(GATE_MIN + ctx.wall * GATE_K);
   function battleState(attUnits, defUnits, ctx, rng) {
     ctx = Object.assign({ siege: false, wall: 0, wallMax: 1, defMorale: 100, attMorale: 100, tactic: 'normal' }, ctx || {});
     const units = [];
@@ -778,9 +952,9 @@ var GUNUNG = (function () {
     };
     place(attUnits, 0); place(defUnits, 1);
     return {
-      units, ctx, rng: rng || makeRng(1), round: 0, over: false, winner: null,
-      gateHp: ctx.siege ? Math.round(ctx.wall * GATE_K) : 0, gateHp0: ctx.siege ? Math.round(ctx.wall * GATE_K) : 0, gateBroken: !ctx.siege || ctx.wall * GATE_K < 1,
-      towers: ctx.siege ? towersFor(ctx.wall) : 0, losses: [0, 0], frames: [], fx: [],
+      units, ctx, rng: rng || makeRng(1), swing: null, round: 0, over: false, winner: null,
+      gateHp: ctx.siege ? gateHpOf(ctx) : 0, gateHp0: ctx.siege ? gateHpOf(ctx) : 0, gateBroken: !ctx.siege,
+      towers: ctx.siege ? towersFor(ctx.wallMax) : 0, losses: [0, 0], frames: [], fx: [],
       dmgBy: [{ inf: 0, arc: 0, cav: 0, tower: 0 }, { inf: 0, arc: 0, cav: 0, tower: 0 }],
     };
   }
@@ -811,6 +985,9 @@ var GUNUNG = (function () {
     const tac = st.ctx.tactic;
     if (tgt.side === 0) dmg *= tac === 'charge' ? 1.1 : tac === 'careful' ? 0.9 : 1;
     if (src && src.side === 0) dmg *= tac === 'charge' ? 1.1 : tac === 'careful' ? 0.9 : 1;
+    // 그날의 기세: 전투마다 양쪽에 한 번씩 정하는 운(접전일수록 결과가 갈림)
+    if (!st.swing) st.swing = [1 - SWING + 2 * SWING * st.rng(), 1 - SWING + 2 * SWING * st.rng()];
+    dmg *= st.swing[1 - tgt.side];
     dmg *= 0.85 + 0.3 * st.rng();
     dmg = Math.min(tgt.troops, Math.max(1, dmg));
     tgt.troops -= dmg;
@@ -934,9 +1111,16 @@ var GUNUNG = (function () {
       if (dist(u, tgt) <= 4) hurt(st, u, tgt, attackPower(u, tgt, dist(u, tgt)), 'arc');
       return;
     }
-    // 성문이 열렸으면 기병·보병은 성 안으로
-    if (st.gateBroken && (u.type === 'cav' || u.state !== 'climbed')) {
-      stepToward(st, u, WALL_X + 1, GATE_Y, DATA.UNIT[u.type].move);
+    // 성문이 열리면 기병과, 성벽에 오르지 못한 보병 중 성문이 가깝거나 아직 성벽에 닿지 않은 부대가 성문으로 간다
+    if (st.gateBroken && (u.type === 'cav' || (u.state !== 'climbed' && (u.x < WALL_X - 1 || Math.abs(u.y - GATE_Y) <= 2)))) {
+      // 성문 앞에 닿으면 무너진 문으로 곧장 쏟아져 들어간다(문 한 칸에 줄 서서 막히지 않게)
+      if (u.x < WALL_X - 1 || Math.abs(u.y - GATE_Y) > 1) stepToward(st, u, WALL_X - 1, GATE_Y, DATA.UNIT[u.type].move);
+      if (u.x === WALL_X - 1 && Math.abs(u.y - GATE_Y) <= 1) {
+        const spots = [];
+        for (let x = WALL_X + 1; x < W; x++) for (let dy = 0; dy <= 3; dy++) for (const y of [GATE_Y - dy, GATE_Y + dy]) if (y >= 0 && y < H) spots.push([x, y]);
+        const free = spots.find(([x, y]) => !occupied(st, x, y, u));
+        if (free) { u.x = free[0]; u.y = free[1]; u.state = 'inside'; u.moved = (u.moved || 0) + 2; }
+      }
       if (u.state === 'inside') {
         const tgt = nearest(st, u, 1, o => dist(u, o) <= 1);
         if (tgt) hurt(st, u, tgt, attackPower(u, tgt, 1), u.type);
@@ -990,7 +1174,7 @@ var GUNUNG = (function () {
         const tgts = alive(st, 0).filter(o => o.x >= WALL_X - 5 && o.state !== 'inside');
         if (!tgts.length) break;
         const t = tgts[(st.round + i) % tgts.length];
-        hurt(st, null, t, TOWER_DMG * (0.6 + 0.4 * st.ctx.wall / st.ctx.wallMax), 'tower');
+        hurt(st, null, t, TOWER_DMG * towerPower(st.ctx.wall, st.ctx.wallMax), 'tower');
         if (st.over) break;
       }
     }
@@ -1058,15 +1242,22 @@ var GUNUNG = (function () {
       o.tut = o.tut || null;
       o.saveVer = 2;
     }
+    if (o.saveVer < 3) {
+      o.convoys = o.convoys || [];
+      o.nextConvoy = o.nextConvoy || 1;
+      o.coalition = o.coalition || null;
+      o.stats = o.stats || { launch: 0, assault: 0, convoy: 0 };
+      o.saveVer = 3;
+    }
     return o;
   }
   function load(str) { return migrate(JSON.parse(str)); }
 
   return {
     SAVE_VER, SAVE_KEY, DATA, TASKS, _hooks, W, H, WALL_X, GATE_Y,
-    TUT_SEED, TUT_STEPS, TUT_SIEGE_TURNS, newTutorial, isProtected, tutSkip, tutDone, tutCheck, tutCanEndTurn, tutRecruiter, defaultArmy,
+    TUT_SEED, TUT_STEPS, TUT_SIEGE_TURNS, newTutorial, isProtected, tutSkip, tutDone, tutCheck, tutCanEndTurn, tutRecruiter, defaultArmy, ownPath, sendTroops, tickConvoys, preparedDefense, aiAttackBar, supplyPlan, updateCoalition, allied, coalitionBias, spareTroops, aiSupply,
     makeRng, newGame, endTurn, setTask, planCity, aiPolicy, effectivePolicy, launchAttack, siegeOrder, tickSieges,
-    recruitAmount, doRecruit, woundedFrom, healWounded, towersFor, sabotage, makeVirtual, yearlyTalent,
+    recruitAmount, doRecruit, woundedFrom, healWounded, towersFor, towerPower, sabotage, makeVirtual, yearlyTalent,
     simulateBattle, battleState, routUnit, canClimb, counter, save, load, migrate, unitCap, bestType,
     tuneAI, assaultOdds, J, tune, gensIn, officersIn, roninIn, citiesOf, defenseOf, powerOf, armyTroops,
   };

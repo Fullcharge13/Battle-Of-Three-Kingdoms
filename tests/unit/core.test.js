@@ -224,3 +224,29 @@ test('30턴을 돌려도 오류가 없고 수치가 깨지지 않는다', () => 
     assert.ok(c.loyalty <= 100);
   }
 });
+
+// ---------- v0.3 공성 곡선 ----------
+test('수성 시설 수는 최대 성벽으로 고정, 위력은 성벽 비율에 연속 비례', () => {
+  assert.equal(K.towersFor(3000), 3);
+  assert.equal(K.towerPower(0, 3000), 0.2);
+  assert.equal(K.towerPower(3000, 3000), 1);
+  assert.ok(Math.abs(K.towerPower(1500, 3000) - 0.6) < 1e-9);
+  const st = K.battleState([], [], { siege: true, wall: 2999, wallMax: 3000 });
+  assert.equal(st.towers, 3, '성벽 2999에서도 시설 3개');
+});
+
+test('성벽을 10%씩 깎으면 공성 승률이 계단 없이 오른다', () => {
+  const g = (i) => ({ id: 'g' + i, name: 'g', lead: 72, war: 72, int: 50, pol: 50, apt: { inf: 'B', arc: 'B', cav: 'B' } });
+  const rates = [];
+  for (let k = 10; k >= 0; k--) {
+    let w = 0;
+    for (let i = 0; i < 120; i++) {
+      const att = ['inf', 'inf', 'arc', 'cav'].map((t, j) => ({ gen: g(j), type: t, troops: 10000, train: 60 }));
+      const def = ['inf', 'arc', 'arc'].map((t, j) => ({ gen: g(10 + j), type: t, troops: 9000, train: 60 }));
+      if (K.simulateBattle(att, def, { siege: true, wall: 300 * k, wallMax: 3000, defMorale: 84 }, K.makeRng(i * 7 + 1), true).winner === 0) w++;
+    }
+    rates.push(w / 120);
+  }
+  for (let i = 1; i < rates.length; i++) assert.ok(rates[i] >= rates[i - 1] - 0.03, '단조 아님: ' + rates.map(r => Math.round(r * 100)).join(','));
+  for (let i = 1; i < rates.length; i++) assert.ok(rates[i] - rates[i - 1] <= 0.2, '한 단계에 20%p 넘게 뜀: ' + rates.map(r => Math.round(r * 100)).join(','));
+});

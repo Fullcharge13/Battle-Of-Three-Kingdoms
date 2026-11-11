@@ -41,13 +41,12 @@ test('건너뛰면 보호가 풀린다', () => {
   assert.equal(K.isProtected(G, 'chenliu'), false);
 });
 
-test('옛 판(형식 1)은 형식 2로 옮겨지고 튜토리얼이 없다', () => {
+test('옛 판(형식 1)은 최신 형식으로 옮겨지고 튜토리얼이 없다', () => {
   const old = JSON.parse(K.save(K.newGame('cao', 2)));
   old.saveVer = 1; delete old.tut;
   const G = K.migrate(old);
-  assert.equal(G.saveVer, 2);
+  assert.equal(G.saveVer, K.SAVE_VER);
   assert.equal(G.tut, null);
-  assert.equal(K.SAVE_VER, 2);
 });
 
 // ---------- 작업 2: 단계 표와 판정 ----------

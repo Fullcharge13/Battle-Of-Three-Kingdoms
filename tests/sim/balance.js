@@ -61,36 +61,48 @@ function siegeRate(wallRatio, morale) {
 }
 console.log(`\n## 3. 공성 (공격 4부대×10000 vs 수비 3부대×9000, 성벽 3000, ${N}판)`);
 console.log('| 상황 | 공격 승률 | 성문 돌파 | 평균 라운드 |\n|---|---|---|---|');
-const cases = [['준비 없이 바로(내구 100%, 사기 100)', 1, 100], ['포위 1턴(사기 92)', 1, 92], ['포위 2턴(사기 84)', 1, 84], ['포위 2턴 + 공작 1회(내구 85%, 사기 84)', 0.85, 84], ['포위 3턴 + 공작 2회(내구 73%, 사기 76)', 0.73, 76]];
+// 공작 1회 ≈ 150 + 지력 70 × 3 = 360 (성벽 3000의 12%)
+const cases = [['준비 없이 바로(성벽 100%, 사기 100)', 1, 100], ['포위 1턴(사기 92)', 1, 92], ['포위 2턴(사기 84)', 1, 84], ['포위 2턴 + 공작 1회(성벽 88%, 사기 84)', 0.88, 84], ['포위 2턴 + 공작 2회(성벽 76%, 사기 84)', 0.76, 84], ['포위 3턴 + 공작 2회(성벽 76%, 사기 76)', 0.76, 76]];
 out.siege = {};
 for (const [label, wr, m] of cases) {
   const s = siegeRate(wr, m); out.siege[label] = s;
   console.log(`| ${label} | ${pct(s.win)} | ${pct(s.gate)} | ${s.rounds.toFixed(1)} |`);
 }
+const curveRow = m => { const r = []; for (let k = 10; k >= 0; k--) r.push(pct(siegeRate(k / 10, m).win)); return r; };
+console.log(`\n성벽 100% → 0% (10%씩), 사기 100: ${curveRow(100).join(' ')}`);
 
 // 4) AI끼리 120턴
 console.log(`\n## 4. AI끼리 120턴 × ${GAMES}판 (관전 모드)`);
 const games = [];
+const yearChanges = new Array(10).fill(0), yearLaunch = new Array(10).fill(0), yearHas = new Array(10).fill(0);
 for (let s = 1; s <= GAMES; s++) {
   const G = K.newGame(null, s * 101, { observer: true });
-  let changes = 0, ch24 = 0, first = null, err = null, unified = null, prev = Object.fromEntries(Object.values(G.cities).map(c => [c.id, c.owner]));
+  let changes = 0, ch24 = 0, first = null, err = null, unified = null, coal = 0, prev = Object.fromEntries(Object.values(G.cities).map(c => [c.id, c.owner]));
+  const perYear = new Array(10).fill(0);
   const alive60 = [];
   try {
     for (let t = 1; t <= 120; t++) {
+      const L0 = G.stats.launch, hadCoal = !!G.coalition;
       K.endTurn(G);
-      for (const c of Object.values(G.cities)) if (c.owner !== prev[c.id]) { changes++; if (t <= 24) ch24++; if (first == null) first = t; prev[c.id] = c.owner; }
+      const y = Math.floor((t - 1) / 12);
+      yearLaunch[y] += G.stats.launch - L0;  // 기록(log)은 120줄로 잘리므로 따로 센 값을 쓴다
+      if (!hadCoal && G.coalition) coal++;
+      for (const c of Object.values(G.cities)) if (c.owner !== prev[c.id]) { changes++; perYear[y]++; if (t <= 24) ch24++; if (first == null) first = t; prev[c.id] = c.owner; }
       if (t === 60) alive60.push(Object.values(G.factions).filter(f => f.alive).length);
       if (G.over === 'unified' && unified == null) { unified = t; break; }
     }
   } catch (e) { err = e.stack.split('\n').slice(0, 3).join(' / '); }
+  perYear.forEach((v, i) => { yearChanges[i] += v; if (v > 0) yearHas[i]++; });
   const alive = Object.values(G.factions).filter(f => f.alive);
   const top = alive.map(f => [f.name, K.citiesOf(G, f.id).length]).sort((a, b) => b[1] - a[1])[0];
   const virt = Object.values(G.gens).filter(g => g.virtual).length;
-  games.push({ seed: s, changes, ch24, first, alive60: alive60[0], aliveEnd: alive.length, top, unified, err, virt, year: G.year });
+  const lateYears = perYear.slice(3, 10).filter(v => v > 0).length;
+  games.push({ seed: s, changes, ch24, first, y1: perYear[0], lateYears, coal, alive60: alive60[0], aliveEnd: alive.length, top, unified, err, virt, year: G.year });
 }
-console.log('| 판 | 주인 바뀜(24턴까지) | 첫 함락 턴 | 60턴 생존 세력 | 끝 생존 | 최대 세력(도시) | 통일 턴 | 가상 인재 | 오류 |\n|---|---|---|---|---|---|---|---|---|');
-for (const g of games) console.log(`| ${g.seed} | ${g.changes}(${g.ch24}) | ${g.first ?? '-'} | ${g.alive60 ?? '-'} | ${g.aliveEnd} | ${g.top ? g.top.join(' ') : '-'} | ${g.unified ?? '-'} | ${g.virt} | ${g.err ? 'X ' + g.err : '0'} |`);
+console.log('| 판 | 주인 바뀜 | 첫해 | 4~10년차 중 바뀐 해 | 연합 결성 | 60턴 생존 | 끝 생존 | 최대 세력(도시) | 통일 턴 | 오류 |\n|---|---|---|---|---|---|---|---|---|---|');
+for (const g of games) console.log(`| ${g.seed} | ${g.changes} | ${g.y1} | ${g.lateYears}/7 | ${g.coal} | ${g.alive60 ?? '-'} | ${g.aliveEnd} | ${g.top ? g.top.join(' ') : '-'} | ${g.unified ?? '-'} | ${g.err ? 'X ' + g.err : '0'} |`);
+console.log('\n연차별(12판 합): ' + yearChanges.map((v, i) => `${i + 1}년 바뀜 ${v}·출진 ${yearLaunch[i]}`).join(' | '));
 const med = a => { const s = a.slice().sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
-console.log(`\n중앙값: 주인 바뀜 ${med(games.map(g => g.changes))}회(24턴까지 ${med(games.map(g => g.ch24))}회), 첫 함락 ${med(games.map(g => g.first ?? 999))}턴, 끝 생존 ${med(games.map(g => g.aliveEnd))}세력, 오류 ${games.filter(g => g.err).length}판, 60턴 이내 통일 ${games.filter(g => g.unified && g.unified <= 60).length}판`);
+console.log(`\n중앙값: 주인 바뀜 ${med(games.map(g => g.changes))}회, 첫해 ${med(games.map(g => g.y1))}회, 4~10년차 바뀐 해 ${med(games.map(g => g.lateYears))}/7, 4년차 이후 AI 출진(판당 연) ${(yearLaunch.slice(3).reduce((a, b) => a + b, 0) / GAMES / 7).toFixed(1)}, 끝 생존 ${med(games.map(g => g.aliveEnd))}세력, 연합 생긴 판 ${games.filter(g => g.coal > 0).length}/${GAMES}, 60턴 이내 통일 ${games.filter(g => g.unified && g.unified <= 60).length}판, 오류 ${games.filter(g => g.err).length}판`);
 out.games = games;
 require('fs').writeFileSync(require('path').join(__dirname, 'last.json'), JSON.stringify(out, null, 1));

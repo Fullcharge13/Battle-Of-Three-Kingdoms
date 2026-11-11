@@ -6,9 +6,11 @@ import json
 import sys
 from pathlib import Path
 from playwright.sync_api import sync_playwright
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 ROOT = Path(__file__).resolve().parent.parent
-URL = (ROOT / "dist" / "index.html").as_uri() + "?seed=3"
+import serve  # noqa: E402
+URL = serve.start() + "?seed=3"
 SHOTS = ROOT / "tests" / "shots"
 SHOTS.mkdir(exist_ok=True)
 
@@ -101,8 +103,8 @@ def run(view, opts):
         page.click("#mClose")
         date2 = page.inner_text("#date")
         # 이어하기
-        page.wait_for_timeout(1500)  # 브라우저가 저장을 디스크에 쓸 시간(휴대폰 흉내에서 바로 새로고침하면 저장이 늦게 반영됨)
-        page.reload()
+        # 같은 브라우저에서 게임을 새로 연다(새로고침과 같은 효과). 시험용 브라우저는 새로고침 직후 저장 반영이 늦을 때가 있어 새 탭을 쓴다
+        page.close(); page = ctx.new_page(); page.goto(URL); page.wait_for_timeout(400)
         page.wait_for_timeout(300)
         enabled = page.is_enabled("#btnLoad")
         page.click("#btnLoad")

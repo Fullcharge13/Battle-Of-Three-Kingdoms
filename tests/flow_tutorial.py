@@ -8,9 +8,11 @@ import json
 import sys
 from pathlib import Path
 from playwright.sync_api import sync_playwright
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 ROOT = Path(__file__).resolve().parent.parent
-URL = (ROOT / "dist" / "index.html").as_uri()
+import serve  # noqa: E402
+URL = serve.start()
 SHOTS = ROOT / "tests" / "shots"
 SHOTS.mkdir(exist_ok=True)
 VIEWS = {
@@ -119,8 +121,8 @@ def run_reload(view, opts):
         page.goto(URL); page.wait_for_timeout(300); page.click("#tutYes"); page.wait_for_timeout(300)
         page.click("#tutNext"); page.click("#tutNext"); tap_city(page, "chenliu"); page.click("#tutNext")
         before = step_no(page)
-        page.wait_for_timeout(1500)  # 저장이 디스크에 쓰일 시간
-        page.reload(); page.wait_for_timeout(400)
+        # 같은 브라우저에서 게임을 새로 연다(새로고침과 같은 효과). 시험용 브라우저는 새로고침 직후 저장 반영이 늦을 때가 있어 새 탭을 쓴다
+        page.close(); page = ctx.new_page(); page.goto(URL); page.wait_for_timeout(400)
         label = page.inner_text("#btnTut")
         page.click("#btnTut"); page.wait_for_timeout(400)
         rep.update(before=before, after=step_no(page), button=label)
